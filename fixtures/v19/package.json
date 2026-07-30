@@ -7,6 +7,7 @@
     "@angular/common": "19.2.25",
     "@angular/compiler": "19.2.25",
     "@angular/core": "19.2.25",
+    "@angular/forms": "19.2.25",
     "rxjs": "7.8.1"
   },
   "devDependencies": {

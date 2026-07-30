@@ -27,10 +27,11 @@ import {
 
 // A burst of didOpen is silently dropped by the server, so we space the opens out.
 const OPEN_STAGGER_MS = 800;
-// The next two constants were eyeballed, not measured, unlike the rest.
-// Pause after didOpen before the first request against the document.
-const SETTLE_AFTER_OPEN_MS = 600;
-// One retry on an empty answer: the answer itself arrives within tens of milliseconds.
+// There is deliberately NO settle pause after didOpen: measured across 90+ opens on two
+// fixtures and the production monorepo (bench:settle, section 2.22) - with the open order,
+// the stagger and the project-load wait in place, a request straight after didOpen never
+// came back empty. The retry below is insurance for races the stand could not reproduce:
+// it never fired in those same measurements.
 const RETRY_DELAY_MS = 900;
 // A 'broken' verdict is rechecked: it can be a false alarm caused by document open races.
 const BROKEN_VERDICT_TTL_MS = 60_000;
@@ -271,7 +272,6 @@ export class NgSession {
       this.loadedApps.add(app);
       await client.waitForProjectLoadSince(since, PROJECT_LOAD_TIMEOUT_MS);
     }
-    await new Promise((resolve) => setTimeout(resolve, SETTLE_AFTER_OPEN_MS));
     return client;
   }
 

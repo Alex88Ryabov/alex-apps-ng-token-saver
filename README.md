@@ -214,9 +214,9 @@ app and "the template is clean" in the next. Verified against both.
 Known gaps, all recorded rather than hidden: an exposure on a host directive from a package
 keeps its name but not its type, and nested host directives are not expanded (the answer says
 so); a base class from a package or behind a mixin call stops the ancestor walk (1 of 1298
-components in the measured monorepo); topics `forms` and `testing` have no measurements; Nx
-repositories with inferred targets yield projects without `tsConfig`; an attribute selector
-inside a CSS rule in `styles: [...]` counts as a directive usage.
+components in the measured monorepo); Nx repositories with inferred targets yield projects
+without `tsConfig`; an attribute selector inside a CSS rule in `styles: [...]` counts as a
+directive usage.
 
 ## Requirements and setup
 
@@ -264,8 +264,9 @@ Configuration, both variables optional:
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 144 unit tests (node:test, no dependencies)
+npm test                                  build plus 145 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
+npm run bench:settle                      whether a pause after didOpen is needed (it is not)
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
 npm run bench:api                         which Angular APIs exist in which majors, and their stability
 npm run bench:contract <project root>     contract size against reading whole files (--tokens adds token counts)
@@ -284,7 +285,10 @@ does not lose members declared in legacy shapes.
 
 ## Status
 
-All six tools work. 144 tests, all green. Verified on six fixtures and on two production
+All six tools work. 145 tests, all green. Every topic of `ng_version_rules` is measured and
+no timing constant is eyeballed anymore: the post-open settle pause turned out to be
+unnecessary (90+ measured opens, zero empty answers) and was removed, making cold per-file
+calls ~1 s faster. Verified on six fixtures and on two production
 codebases (1298 and 407 components, zero parse errors), plus one project running Angular 16 to
 check that out-of-range refusals are structured rather than silent.
 
@@ -294,8 +298,10 @@ in 250–600 ms on the first call and in milliseconds once the project's TypeScr
 A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
 so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
 
-Not done yet: the `forms` and `testing` topics of `ng_version_rules` have no measurements, and
-two timing constants in the session layer are chosen rather than measured.
+Signal Forms, measured: the `@angular/forms/signals` entry point exists only from v21, is
+experimental there, and is stable on 22.0.8; `AbstractControl.events` exists from v18;
+`TestBed.tick` from v20. All of it came from importing the installed packages and probing
+live objects, not from release notes.
 
 `CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
 Russian: the full measurement log, every dead end, and the reasoning behind each decision.

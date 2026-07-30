@@ -7,6 +7,7 @@
     "@angular/common": "20.3.26",
     "@angular/compiler": "20.3.26",
     "@angular/core": "20.3.26",
+    "@angular/forms": "20.3.26",
     "rxjs": "7.8.1"
   },
   "devDependencies": {

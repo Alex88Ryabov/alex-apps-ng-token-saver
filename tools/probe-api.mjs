@@ -40,8 +40,9 @@ const TARGETS = {
   ],
   '@angular/common': ['NgIf', 'NgFor', 'NgClass', 'AsyncPipe'],
   '@angular/common/http': ['HttpClient', 'provideHttpClient', 'withFetch', 'httpResource'],
-  '@angular/forms': ['FormControl', 'FormBuilder'],
-  '@angular/forms/signals': ['form', 'Control'],
+  '@angular/forms': ['FormControl', 'FormGroup', 'FormBuilder', 'NonNullableFormBuilder', 'FormRecord', 'ReactiveFormsModule', 'Validators'],
+  '@angular/forms/signals': ['form', 'FormField', 'schema', 'required', 'submit'],
+  '@angular/core/testing': ['TestBed', 'fakeAsync', 'tick', 'flush', 'waitForAsync', 'DeferBlockBehavior'],
 };
 
 // Packages with decorators (@angular/common and beyond) fail on JIT under bare Node, so the
@@ -59,6 +60,31 @@ for (const [name, symbols] of Object.entries(targets)) {
     const missing = error?.code === 'ERR_MODULE_NOT_FOUND' || error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
     out[name] = missing ? null : { __failed: String(error?.message ?? error).slice(0, 80) };
   }
+}
+// Runtime shape: instance members and statics are invisible to a typeof over the module.
+out.__runtime = {};
+try {
+  const forms = await import('@angular/forms');
+  out.__runtime.formControlEvents = 'events' in new forms.FormControl('');
+} catch {
+  out.__runtime.formControlEvents = null;
+}
+try {
+  const testing = await import('@angular/core/testing');
+  out.__runtime.testBedStatics = Object.fromEntries(
+    ['flushEffects', 'tick', 'inject', 'runInInjectionContext'].map((name) => [
+      name,
+      typeof testing.TestBed?.[name] === 'function',
+    ]),
+  );
+} catch {
+  out.__runtime.testBedStatics = null;
+}
+try {
+  const signals = await import('@angular/forms/signals');
+  out.__runtime.signalFormsKeys = Object.keys(signals).sort();
+} catch {
+  out.__runtime.signalFormsKeys = null;
 }
 console.log(JSON.stringify(out));
 `;
@@ -178,6 +204,23 @@ for (const [module, symbols] of Object.entries(TARGETS)) {
   }
 }
 console.log(`\n  + present, . absent, - no package, ? import failed.  Columns: ${labels.join(' ')}`);
+
+console.log('\nRuntime shape (instance members and statics, invisible to module typeof):');
+for (const label of labels) {
+  const runtime = results.get(label).api.__runtime ?? {};
+  const statics = runtime.testBedStatics
+    ? Object.entries(runtime.testBedStatics)
+        .filter(([, present]) => present)
+        .map(([name]) => name)
+        .join(', ') || '(none of the probed)'
+    : '—';
+  const events = runtime.formControlEvents === null ? '—' : runtime.formControlEvents ? '+' : '.';
+  console.log(`  ${label}: FormControl.events=${events}  TestBed statics: ${statics}`);
+  if (runtime.signalFormsKeys) {
+    const keys = runtime.signalFormsKeys;
+    console.log(`    forms/signals exports (${keys.length}): ${keys.slice(0, 26).join(' ')}${keys.length > 26 ? ' …' : ''}`);
+  }
+}
 
 // A symbol being present does not mean it can be advised: before stabilisation APIs break without a major.
 const SHORT = { publicApi: 'stable', experimental: 'EXPERIMENTAL', developerPreview: 'preview', 'no tag': 'no tag' };

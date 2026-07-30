@@ -18,6 +18,7 @@
     "bench:matrix": "node tools/lsp-probe.mjs --server tools/servers/ls22 --project fixtures/v22",
     "bench:negative": "node tools/lsp-negative.mjs",
     "bench:didchange": "node tools/lsp-didchange.mjs --server tools/servers/ls22 --project fixtures/v17",
+    "bench:settle": "node tools/probe-settle.mjs",
     "bench:standalone": "node tools/probe-standalone.mjs v17 v18 v19 v20 v21 v22",
     "bench:contract": "node tools/bench-contract.mjs",
     "bench:diagnose": "node tools/bench-diagnose.mjs",

@@ -38,19 +38,43 @@ test('the *ngIf deprecation is called a hint, not an error, and only from v20', 
 });
 
 test('a minor below the measured one is flagged: the measurement does not cover the whole major', () => {
-  assert.equal(versionRules('17.3.12', 17).caveat.includes('measurements were taken'), false);
+  // On the exact measured version, with every topic now measured, there is nothing to caveat.
+  assert.equal(versionRules('17.3.12', 17).caveat, null);
   // A patch below the measured one is no reason to caveat: APIs ship in minors.
   assert.equal(versionRules('19.2.18', 19, 'signals').caveat, null);
   const older = versionRules('17.0.5', 17);
   assert.match(older.caveat, /measurements were taken on 17\.3\.12 while you are on 17\.0\.5/);
 });
 
-test('an unmeasured topic answers with emptiness but explains it in words', () => {
-  const forms = versionRules('19.2.18', 19, 'forms');
-  assert.deepEqual(forms.rules, []);
-  assert.deepEqual(forms.antiPatterns, []);
-  assert.deepEqual(forms.notMeasured, ['forms']);
-  assert.match(forms.caveat, /topics forms were never measured.*does not mean 'anything goes'/);
+// Measured 2026-07-30 (section 2.21): reactive forms exist across the range, control.events
+// from v18, Signal Forms only from v21 and experimental there, stable on 22.0.8.
+test('forms: signal forms are refused below v21 and marked unstable on v21', () => {
+  const v19 = versionRules('19.2.25', 19, 'forms');
+  assert.ok(v19.rules.some((rule) => rule.includes('Reactive forms are available')));
+  assert.ok(v19.rules.some((rule) => rule.includes('AbstractControl.events')));
+  assert.ok(v19.antiPatterns.some((item) => item.wrong.includes('@angular/forms/signals')));
+  assert.equal(v19.notMeasured, null);
+
+  const v17 = versionRules('17.3.12', 17, 'forms');
+  assert.ok(!v17.rules.some((rule) => rule.includes('AbstractControl.events')), 'events exists only from v18');
+
+  const v21 = versionRules('21.2.18', 21, 'forms');
+  assert.ok(v21.rules.some((rule) => rule.includes('experimental') && rule.includes('form')));
+
+  const v22 = versionRules('22.0.8', 22, 'forms');
+  assert.ok(v22.rules.some((rule) => rule.startsWith('Available:') && rule.includes('form')));
+});
+
+test('testing: TestBed.tick exists only from v20, flushEffects is deprecated there', () => {
+  const v19 = versionRules('19.2.25', 19, 'testing');
+  assert.ok(v19.rules.some((rule) => rule.includes('TestBed.flushEffects')));
+  assert.ok(v19.antiPatterns.some((item) => item.wrong.includes('TestBed.tick()')));
+  assert.ok(!v19.antiPatterns.some((item) => item.wrong.includes('flushEffects')));
+
+  const v20 = versionRules('20.3.26', 20, 'testing');
+  assert.ok(v20.rules.some((rule) => rule.startsWith('Available:') && rule.includes('TestBed.tick')));
+  assert.ok(v20.antiPatterns.some((item) => item.wrong === 'TestBed.flushEffects()'));
+  assert.equal(v20.notMeasured, null);
 });
 
 test('a topic narrows the answer without mixing in neighbouring ones', () => {

@@ -36,7 +36,8 @@ const MEASURED_AT: Record<number, string> = {
 };
 
 // Measured on 2026-07-29 against fixtures 17.3.12, 18.2.14, 19.2.25, 20.3.26, 21.2.18 and 22.0.8
-// by importing the real packages. Precision is per major: inside v17 these APIs appeared in
+// by importing the real packages; forms and testing on 2026-07-30 after installing
+// @angular/forms into every fixture. Precision is per major: inside v17 these APIs appeared in
 // different minors (17.1..17.3), which the stand cannot distinguish.
 const API: ApiFact[] = [
   { name: 'linkedSignal', module: '@angular/core', topic: 'signals', from: 19, until: null, unstableUpTo: 19, instead: 'computed() plus a separate signal for writes' },
@@ -56,6 +57,17 @@ const API: ApiFact[] = [
   { name: 'effect', module: '@angular/core', topic: 'signals', from: 17, until: null, unstableUpTo: 19 },
   { name: 'toObservable', module: '@angular/core/rxjs-interop', topic: 'signals', from: 17, until: null, unstableUpTo: 19 },
   { name: 'takeUntilDestroyed', module: '@angular/core/rxjs-interop', topic: 'signals', from: 17, until: null, unstableUpTo: 18 },
+  // Signal Forms: the subpath itself only exists from v21, experimental there, stable on 22.0.8.
+  { name: 'form', module: '@angular/forms/signals', topic: 'forms', from: 21, until: null, unstableUpTo: 21, instead: 'reactive forms: FormControl and FormGroup' },
+  { name: 'schema', module: '@angular/forms/signals', topic: 'forms', from: 21, until: null, unstableUpTo: 21, instead: 'reactive forms validators' },
+  { name: 'required', module: '@angular/forms/signals', topic: 'forms', from: 21, until: null, unstableUpTo: 21, instead: 'Validators.required' },
+  { name: 'submit', module: '@angular/forms/signals', topic: 'forms', from: 21, until: null, unstableUpTo: 21, instead: '(ngSubmit) plus manual status handling' },
+  // The selector is measured, not guessed: read from the compiled DirectiveDeclaration in
+  // the shipped .d.ts of both v21 and v22 - "[formField]", required signal input `field`.
+  { name: 'FormField', module: '@angular/forms/signals', topic: 'forms', from: 21, until: null, unstableUpTo: 21, usage: '[formField]', instead: 'formControlName / [formControl]' },
+  // A TestBed static, not an import: presence probed at runtime, and the member-level JSDoc
+  // read by hand on v20-v22 (the probe regex only sees top-level declares): @publicApi 20.0.
+  { name: 'TestBed.tick', module: '@angular/core/testing', topic: 'testing', from: 20, until: null, usage: 'TestBed.tick()', instead: 'fixture.detectChanges(), or fakeAsync plus tick()' },
 ];
 
 interface SyntaxFact {
@@ -64,28 +76,35 @@ interface SyntaxFact {
   rule: string;
 }
 
-// Compiler gates from section 2.14: read in the 22.0.8 bundle and confirmed by a run.
+// Compiler gates from section 2.14 (read in the 22.0.8 bundle, confirmed by a run) plus
+// runtime-shape facts from section 2.21: instance members and statics probed on live objects.
 const SYNTAX: SyntaxFact[] = [
   { topic: 'control-flow', from: 17, rule: 'Blocks @if/@for/@switch are available' },
   { topic: 'signals', from: 17, rule: 'Signals in two-way bindings are type-checked (from 17.2)' },
   { topic: 'control-flow', from: 18, rule: '@let is available (from 18.1)' },
   { topic: 'components', from: 19, rule: 'standalone is the default, writing standalone: true is unnecessary' },
   { topic: 'components', from: 20, rule: 'DOM event type assertion in templates works (from 20.2)' },
+  { topic: 'forms', from: 17, rule: 'Reactive forms are available: FormControl, FormBuilder, NonNullableFormBuilder, FormRecord' },
+  { topic: 'forms', from: 18, rule: 'AbstractControl.events (unified control events) is available' },
+  { topic: 'testing', from: 17, rule: 'TestBed, fakeAsync/tick/flush, waitForAsync, DeferBlockBehavior and TestBed.runInInjectionContext are available' },
+  // Member-level JSDoc read by hand: @developerPreview on 17-19, @deprecated from 20, and at
+  // runtime the 20+ implementation is literally `return TestBedImpl.INSTANCE.tick()`.
+  { topic: 'testing', from: 17, rule: 'TestBed.flushEffects exists across the range: developer preview on 17-19, deprecated in favour of TestBed.tick() from 20' },
 ];
 
 export interface VersionRules {
   angularVersion: string;
   rules: string[];
   antiPatterns: Array<{ wrong: string; right: string; since: string }>;
-  /** Topics with no measurements: empty does not mean 'there are no rules'. */
-  notMeasured: Topic[];
+  /** Topics with no measurements; null once every topic carries measured rules. */
+  notMeasured: Topic[] | null;
   /** In words: what this answer does not know. An unexplained empty list reads as 'anything goes'. */
   caveat: string | null;
 }
 
-// The stand answers nothing on these topics: @angular/forms is not installed in the fixtures and
-// no testing runs were made. Staying silent is not an option: emptiness would read as 'all good'.
-const NOT_MEASURED: Topic[] = ['forms', 'testing'];
+// Empty since 2026-07-30: forms and testing were the last silent topics, closed by installing
+// @angular/forms into all six fixtures and probing runtime shapes (section 2.21).
+const NOT_MEASURED: Topic[] = [];
 
 function availableIn(fact: ApiFact, major: number): boolean {
   return major >= fact.from && (fact.until === null || major <= fact.until);
@@ -101,7 +120,7 @@ export function versionRules(angularVersion: string, major: number, topic?: Topi
       angularVersion,
       rules: [],
       antiPatterns: [],
-      notMeasured: [],
+      notMeasured: null,
       caveat: `Angular v${major} is outside the measured v17-v22 range, so there are no rules for it and no guesses are offered`,
     };
   }
@@ -149,13 +168,20 @@ export function versionRules(angularVersion: string, major: number, topic?: Topi
       since: 'standalone is the default only from v19',
     });
   }
+  if (major >= 20 && (!topic || topic === 'testing')) {
+    antiPatterns.push({
+      wrong: 'TestBed.flushEffects()',
+      right: 'TestBed.tick()',
+      since: 'deprecated since v20; measured: at runtime it is an alias of tick()',
+    });
+  }
 
   const silent = NOT_MEASURED.filter((item) => !topic || item === topic);
   return {
     angularVersion,
     rules,
     antiPatterns,
-    notMeasured: silent,
+    notMeasured: silent.length > 0 ? silent : null,
     caveat: caveatFor(angularVersion, major, silent),
   };
 }

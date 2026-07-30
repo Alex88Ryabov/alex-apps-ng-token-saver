@@ -36,7 +36,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const serversDir = process.env['NG_TOKEN_SAVER_SERVERS_DIR'] ?? join(here, '..', 'tools', 'servers');
 
 // A session unused this long shuts its ngserver down; the next call pays the cold start
-// again. Chosen, not measured. Override with NG_TOKEN_SAVER_IDLE_MS; 0 disables the shutdown.
+// again. Policy from measured inputs (section 2.22): a warm server holds ~1 GB on the
+// production monorepo (979 MB RSS) while a reload costs 8-28 s.
+// Override with NG_TOKEN_SAVER_IDLE_MS; 0 disables the shutdown.
 const DEFAULT_IDLE_MS = 15 * 60_000;
 const rawIdleMs = Number(process.env['NG_TOKEN_SAVER_IDLE_MS'] ?? DEFAULT_IDLE_MS);
 const registry = new SessionRegistry(
