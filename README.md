@@ -4,9 +4,11 @@
 **templates** by asking the same compiler that builds the project, instead of guessing from
 file text. The token saving is measured, not promised: see the numbers below.
 
-Angular is the only major front-end framework with a first-class language server and no
-integration with any AI agent. This bridges that gap, and adds something the language server
-cannot give: answers that are correct **for the Angular version this project actually runs**.
+Angular ships a first-class language server, but no official AI integration exposes it: the
+Angular CLI MCP (`ng mcp`, since CLI 20.1) works at the docs-and-build level — nine tools,
+none of which touches templates or the language server (verified by running it, July 2026).
+This server is that missing layer, and it adds what the language server alone cannot give:
+answers that are correct **for the Angular version this project actually runs**.
 
 Everything below marked as measured was produced by running code against six real Angular
 workspaces (17.3.12, 18.2.14, 19.2.25, 20.3.26, 21.2.18, 22.0.8) and two production projects.
@@ -18,9 +20,11 @@ Every number can be reproduced with the commands in [Reproducing the measurement
 `{{ user().fullName }}` is declared, and no amount of reading gives you `NG2339 Property
 'emailAddress' does not exist on type 'UserVm'`. That is compiler output, not text.
 
-**2. Version drift.** The AI context files on angular.dev are not versioned and are written
-for the newest major. On v17–v21 they hand the agent instructions that produce APIs which do
-not exist. Measured examples are in [Version facts](#version-facts-measured-not-read).
+**2. Version drift.** The AI context files on angular.dev (`llms.txt`) carry no version
+markers and describe the newest major, and the versioned archive sites serve none at all
+(checked July 2026: `v17.angular.io/llms.txt` is a 404). On v17–v21 they hand the agent
+instructions that produce APIs which do not exist. Measured examples are in
+[Version facts](#version-facts-measured-not-read).
 
 ## Tools
 
@@ -149,8 +153,12 @@ app and "the template is clean" in the next. Verified against both.
   selector (it is derived from the file), that element/attribute/pipe/class/declaration kinds are
   labelled, that all four attribute spellings are covered, and that a closing tag is not counted
   as a second usage.
-- **Not a replacement for the Angular CLI MCP** where that one is available. It requires CLI
-  20.2+, so it cannot serve v17–v19 at all; this bridge covers v17–v22.
+- **Not a replacement for the Angular CLI MCP** — a different layer. Verified by running it
+  in July 2026: nine tools (docs search, best practices, project listing, build and devserver
+  orchestration, an OnPush migration), none touching templates or the language server. It
+  launches fine even inside a v17 workspace via `npx @angular/cli@latest mcp`, but its
+  answers follow the CLI that runs it, not the Angular version the project uses. The two
+  servers complement each other.
 - **Not a type checker of its own.** Everything the LSP-backed tools report comes from the same
   compiler that builds the project. The value is in delivering it undistorted.
 
