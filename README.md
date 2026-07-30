@@ -55,8 +55,10 @@ across two production codebases through a real MCP client (`npm run bench:contra
 | Sources | 5 404 314 chars | 1 735 223 chars |
 | Contracts (base-class members included) | 1 870 205 chars | 463 563 chars |
 | **Saved** | **65%** | **73%** |
+| **Saved in tokens** (o200k_base proxy) | **64%** (cl100k 65%) | **71%** (cl100k 71%) |
 | Contract shorter than source | 1173 of 1298 (90%) | 386 of 407 (95%) |
 | Ratio, median | 0.44 (p10 0.21, p90 0.99) | 0.33 (p10 0.19, p90 0.83) |
+| Token ratio, median | 0.47 (p10 0.21, p90 1.05) | 0.35 (p10 0.20, p90 0.93) |
 | Flagged as partial | 1 of 1298 | 3 of 407 |
 | First call (loads the project's TypeScript) | 300 ms | 564 ms |
 
@@ -72,17 +74,52 @@ that.
 
 Three caveats that must travel with these numbers:
 
-- **Characters were counted, not tokens.** There is no tokenizer in this project and adding a
-  dependency just for a benchmark was not allowed. How JSON and TypeScript tokenize relative to
-  each other was not measured, so do not convert these figures to tokens by multiplication.
+- **Tokens are counted through a proxy.** Claude's tokenizer is not public, so token counts use
+  OpenAI's `o200k_base` via gpt-tokenizer — the bench installs it into a temp cache, the product
+  itself stays dependency-free — with `cl100k_base` as a cross-check. The two agree within one
+  point on this data. Characters are exact.
 - **The baseline is reading the whole file**, which is what an agent does by default when asked
   what a component accepts.
-- **Only that one scenario was measured.** Renaming an input across usages, and diagnosing a
-  template that will not compile, were not.
+- **JSON tokenizes slightly worse than TypeScript**: the median contract/source ratio on the
+  monorepo is 0.47 in tokens against 0.44 in characters. The table carries both.
 
 On small components there is no saving at all: a 17-line component produces a 578-character
 contract against a 315-character source. The contract grows with the number of members while
 the source grows with method bodies, and on production code the second wins almost always.
+
+## Measured: the other two scenarios
+
+**Renaming an input across usages** (`npm run bench:rename <component> <input>`). The grep path
+an agent actually takes — read the component file to learn the selector, then grep the selector
+and the binding spellings of the input repo-wide — against `ng_component_info` plus
+`ng_find_usages`. Neither path performs the rename; measured is the cost of locating candidate
+sites. On the production monorepo, 6243 files scanned:
+
+| Component | grep path | bridge | saved (o200k, upper bound) |
+|---|---|---|---|
+| 466 usages, input `icon` | 41 698 tokens | 22 756 tokens | **45%** |
+| 577 usages, input `mask` | 50 527 tokens | 25 863 tokens | 49%\* |
+| 1211 usages, input `name` | 129 227 tokens | 28 207 tokens | 78%\* |
+
+\* the tool caps an answer at 500 usages, so on these two components it returned fewer sites
+than grep printed — part of that saving is truncation, and it is marked rather than hidden.
+
+**Why "upper bound":** the two answers are not the same depth. `ng_find_usages` locates
+component usages — the element tag — and knows nothing about the input, while the binding grep
+already narrows to binding-shaped lines. Each path leaves different residual work: after the
+bridge the agent still checks, per usage, whether this input is bound there; after the grep it
+still attributes each binding line to the right component — on the `icon` run the grep produced
+674 binding lines against 466 component usages, and only the 196 sitting in files without the
+selector are provably somebody else's. Neither residual is measured, so read the percentages as
+the bridge's ceiling, not a like-for-like verdict.
+
+**Diagnosing a template that will not compile** (`npm run bench:diagnose`). The compiler listing
+— ngc over the whole fixture, ANSI stripped, which is a conservative floor for a real `ng build`
+— against one `ng_template_diagnostics` call: **395 tokens, 5 errors, 1321 ms** for the listing
+versus **81 tokens, the two diagnostics of the asked file, 1 ms warm**. 79% fewer tokens on a
+deliberately tiny project, and the gap only widens with size: the listing grows with the
+project, the answer does not. After an edit the loop repeats — a rebuild against a 340–400 ms
+diagnostics push.
 
 ## Version facts, measured not read
 
@@ -229,7 +266,9 @@ npm test                                  build plus 129 unit tests (node:test, 
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
 npm run bench:api                         which Angular APIs exist in which majors, and their stability
-npm run bench:contract <project root>     contract size against reading whole files
+npm run bench:contract <project root>     contract size against reading whole files (--tokens adds token counts)
+npm run bench:rename <component> <input>  the grep path against the bridge for an input rename
+npm run bench:diagnose                    a compiler listing against one diagnostics call
 npm run bench:matrix                      resolution probes across a fixture
 npm run bench:negative                    what the server returns when things break
 npm run bench:didchange                   diagnostics timing after an edit
@@ -253,8 +292,7 @@ in 250–600 ms on the first call and in milliseconds once the project's TypeScr
 A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
 so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
 
-Not done yet: host-directive members in the contract, and the two remaining token-saving
-scenarios.
+Not done yet: host-directive members in the contract.
 
 `CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
 Russian: the full measurement log, every dead end, and the reasoning behind each decision.

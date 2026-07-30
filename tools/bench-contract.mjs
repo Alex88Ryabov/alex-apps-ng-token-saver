@@ -1,14 +1,15 @@
 // Section 5 benchmark, scenario 2: 'what does this component accept' - reading the whole file
 // versus ng_component_info. It goes through a real MCP client, so it measures what an agent gets.
-// We count characters, not tokens: there is no tokenizer in the project and adding one just for
-// a benchmark is not allowed. How JSON and code tokenize differently was not measured.
+// Characters by default; with --tokens it also counts tokens through the o200k_base proxy
+// (Claude's own tokenizer is private - see tools/token-count.mjs for the caveats).
 //
-//   node tools/bench-contract.mjs <project root> [more roots...]
+//   node tools/bench-contract.mjs <project root> [more roots...] [--tokens]
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { loadTokenizers } from './token-count.mjs';
 
 const SKIP = new Set(['node_modules', 'dist', '.git', '.angular', '.nx', 'coverage', 'out-tsc', 'tmp']);
 
@@ -44,10 +45,14 @@ function findComponents(root, limit) {
 
 const percentile = (sorted, share) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * share))];
 
-const roots = process.argv.slice(2);
+const roots = process.argv.slice(2).filter((item) => item !== '--tokens');
 if (roots.length === 0) {
   console.error('pass at least one project root');
   process.exit(1);
+}
+const counters = process.argv.includes('--tokens') ? await loadTokenizers() : null;
+if (counters) {
+  console.log(`tokenizer: gpt-tokenizer ${counters.version}, o200k_base proxy (Claude's tokenizer is private)`);
 }
 
 const client = new Client({ name: 'bench-contract', version: '0.0.0' });
@@ -105,10 +110,15 @@ for (const root of roots) {
       multiClass += 1;
       continue;
     }
+    const sourceText = readFileSync(file, 'utf8');
     rows.push({
       file,
-      source: readFileSync(file, 'utf8').length,
+      source: sourceText.length,
       contract: text.length,
+      sourceTokens: counters ? counters.o200k(sourceText) : 0,
+      contractTokens: counters ? counters.o200k(text) : 0,
+      sourceCl: counters ? counters.cl100k(sourceText) : 0,
+      contractCl: counters ? counters.cl100k(text) : 0,
       members: parsed.inputs.length + parsed.outputs.length + parsed.publicMembers.length,
       incomplete: typeof parsed.incomplete === 'string',
     });
@@ -133,6 +143,18 @@ for (const root of roots) {
   console.log(`    flagged as partial (base class or host directives): ${rows.filter((row) => row.incomplete).length}`);
   console.log(`    contract/source ratio - median ${percentile(ratios, 0.5).toFixed(2)}, ` +
     `p10 ${percentile(ratios, 0.1).toFixed(2)}, p90 ${percentile(ratios, 0.9).toFixed(2)}`);
+  if (counters) {
+    const sourceTok = rows.reduce((sum, row) => sum + row.sourceTokens, 0);
+    const contractTok = rows.reduce((sum, row) => sum + row.contractTokens, 0);
+    const sourceCl = rows.reduce((sum, row) => sum + row.sourceCl, 0);
+    const contractCl = rows.reduce((sum, row) => sum + row.contractCl, 0);
+    const tokenRatios = rows.map((row) => row.contractTokens / row.sourceTokens).sort((a, b) => a - b);
+    console.log(`    tokens o200k_base: sources ${sourceTok}, contracts ${contractTok} ` +
+      `(${Math.round((1 - contractTok / sourceTok) * 100)}% saved); ` +
+      `cl100k_base saving ${Math.round((1 - contractCl / sourceCl) * 100)}%`);
+    console.log(`    token ratio o200k - median ${percentile(tokenRatios, 0.5).toFixed(2)}, ` +
+      `p10 ${percentile(tokenRatios, 0.1).toFixed(2)}, p90 ${percentile(tokenRatios, 0.9).toFixed(2)}`);
+  }
   console.log('    ten largest components:');
   for (const row of bySource.slice(0, 10)) {
     const name = row.file.slice(resolve(root).length + 1);

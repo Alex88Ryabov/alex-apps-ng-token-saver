@@ -20,6 +20,8 @@
     "bench:didchange": "node tools/lsp-didchange.mjs --server tools/servers/ls22 --project fixtures/v17",
     "bench:standalone": "node tools/probe-standalone.mjs v17 v18 v19 v20 v21 v22",
     "bench:contract": "node tools/bench-contract.mjs",
+    "bench:diagnose": "node tools/bench-diagnose.mjs",
+    "bench:rename": "node tools/bench-rename.mjs",
     "bench:api": "node tools/probe-api.mjs"
   },
   "dependencies": {
