@@ -252,6 +252,23 @@ With Claude Code that is one command:
 claude mcp add ng-token-saver -- node <path>/dist/index.js
 ```
 
+The server is a plain stdio MCP server with no client-specific features, so any MCP client
+can launch it. Two more clients, with configs taken from their documentation (not from a run
+of ours — protocol compatibility itself is verified by the benches, which talk to the server
+through a real MCP client over stdio):
+
+**Codex CLI** — `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.ng-token-saver]
+command = "node"
+args = ["<path>/dist/index.js"]
+```
+
+**JetBrains AI Assistant / Junie** — Settings → Tools → AI Assistant → Model Context
+Protocol accepts the same JSON as above (the format deliberately mirrors Claude Desktop's);
+for Junie, additionally enable "Pass custom MCP servers".
+
 Configuration, both variables optional:
 
 - `NG_TOKEN_SAVER_IDLE_MS` — a language-server session unused this long shuts its ngserver
