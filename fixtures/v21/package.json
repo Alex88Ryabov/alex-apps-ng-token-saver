@@ -1,0 +1,17 @@
+{
+  "name": "fixture-v21",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Минимальный воркспейс Angular 21 для проб language-server",
+  "dependencies": {
+    "@angular/common": "21.2.18",
+    "@angular/compiler": "21.2.18",
+    "@angular/core": "21.2.18",
+    "rxjs": "7.8.1"
+  },
+  "devDependencies": {
+    "@angular/compiler-cli": "21.2.18",
+    "@angular/language-service": "21.2.18",
+    "typescript": ">=5.9 <6.1"
+  }
+}

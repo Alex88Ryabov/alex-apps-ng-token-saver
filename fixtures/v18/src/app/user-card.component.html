@@ -1,0 +1,14 @@
+<section>
+  @let display = user().fullName;
+
+  <h2>{{ greeting }}</h2>
+  <p>{{ display }}</p>
+  <button (click)="onSelect(user().id)">select</button>
+
+  @if (user().id > 0) {
+    <span>ok</span>
+  }
+
+  <p>{{ user().emailAddress }}</p>
+  <button (click)="onSelect('not-a-number')">broken</button>
+</section>

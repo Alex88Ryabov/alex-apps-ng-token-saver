@@ -1,0 +1,17 @@
+{
+  "name": "fixture-v20",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Минимальный воркспейс Angular 20 для проб language-server",
+  "dependencies": {
+    "@angular/common": "20.3.26",
+    "@angular/compiler": "20.3.26",
+    "@angular/core": "20.3.26",
+    "rxjs": "7.8.1"
+  },
+  "devDependencies": {
+    "@angular/compiler-cli": "20.3.26",
+    "@angular/language-service": "20.3.26",
+    "typescript": ">=5.8 <6.0"
+  }
+}

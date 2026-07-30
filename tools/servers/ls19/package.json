@@ -1,0 +1,9 @@
+{
+  "name": "ls19",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ветка language-server 19 — для проверки несовпадения ветки и мажора проекта",
+  "dependencies": {
+    "@angular/language-server": "19.2.4"
+  }
+}

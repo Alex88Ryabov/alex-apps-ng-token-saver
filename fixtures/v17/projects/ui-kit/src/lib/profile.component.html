@@ -1,0 +1,7 @@
+<section class="profile">
+  {{ user().fullName }}
+  <button (click)="select(user().id)">select</button>
+
+  {{ user().emailAddress }}
+  <button (click)="select('nope')">broken</button>
+</section>

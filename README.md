@@ -1,0 +1,228 @@
+# ng-token-saver
+
+`@alex-apps/ng-token-saver` — an MCP server that lets an AI agent understand Angular
+**templates** by asking the same compiler that builds the project, instead of guessing from
+file text. The token saving is measured, not promised: see the numbers below.
+
+Angular is the only major front-end framework with a first-class language server and no
+integration with any AI agent. This bridges that gap, and adds something the language server
+cannot give: answers that are correct **for the Angular version this project actually runs**.
+
+Everything below marked as measured was produced by running code against six real Angular
+workspaces (17.3.12, 18.2.14, 19.2.25, 20.3.26, 21.2.18, 22.0.8) and two production projects.
+Every number can be reproduced with the commands in [Reproducing the measurements](#reproducing-the-measurements).
+
+## The two problems it solves
+
+**1. No template awareness.** `grep` over an `.html` file cannot tell you where
+`{{ user().fullName }}` is declared, and no amount of reading gives you `NG2339 Property
+'emailAddress' does not exist on type 'UserVm'`. That is compiler output, not text.
+
+**2. Version drift.** The AI context files on angular.dev are not versioned and are written
+for the newest major. On v17–v21 they hand the agent instructions that produce APIs which do
+not exist. Measured examples are in [Version facts](#version-facts-measured-not-read).
+
+## Tools
+
+Six tools, 1093 characters of descriptions in total. Answers are dense JSON with no markdown.
+
+| Tool | What it answers | Needs the language server |
+|---|---|---|
+| `ng_template_definition` | where a symbol under this template position is declared | yes |
+| `ng_template_diagnostics` | Angular compiler errors for this template | yes |
+| `ng_component_info` | the public contract of a component or directive | no |
+| `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
+| `ng_version_rules` | what exists and what does not in this project's Angular version | no |
+| `ng_find_usages` | where a component, directive or pipe is used | no |
+
+Four of the six never start the language server, so they answer in milliseconds and keep
+working on workspaces where the server refuses to load.
+
+## Measured: contract instead of the whole file
+
+`ng_component_info` returns the public contract of a component rather than its source. Measured
+across two production codebases through a real MCP client (`npm run bench:contract`):
+
+| | Nx monorepo | CLI workspace |
+|---|---|---|
+| Angular / TypeScript | 19.2.18 / 5.8.3 | 17.3.8 / 5.3.3 |
+| Components in the tally | 1298 | 227 |
+| Parse errors | 0 | 0 |
+| Sources | 5 403 479 chars | 1 033 725 chars |
+| Contracts | 1 689 800 chars | 259 184 chars |
+| **Saved** | **69%** | **75%** |
+| Contract shorter than source | 1214 of 1298 (94%) | 222 of 227 (98%) |
+| Ratio, median | 0.44 (p10 0.20, p90 0.89) | 0.29 (p10 0.17, p90 0.81) |
+| First call (loads the project's TypeScript) | 315 ms | 601 ms |
+
+The largest component in the monorepo shrinks from **177 333 to 10 592 characters** while
+listing 118 contract members.
+
+Three caveats that must travel with these numbers:
+
+- **Characters were counted, not tokens.** There is no tokenizer in this project and adding a
+  dependency just for a benchmark was not allowed. How JSON and TypeScript tokenize relative to
+  each other was not measured, so do not convert these figures to tokens by multiplication.
+- **The baseline is reading the whole file**, which is what an agent does by default when asked
+  what a component accepts.
+- **Only that one scenario was measured.** Renaming an input across usages, and diagnosing a
+  template that will not compile, were not.
+
+On small components there is no saving at all: a 17-line component produces a 578-character
+contract against a 315-character source. The contract grows with the number of members while
+the source grows with method bodies, and on production code the second wins almost always.
+
+## Version facts, measured not read
+
+`ng_version_rules` contains no rule taken from documentation. The data comes from importing the
+real packages installed in each fixture (`npm run bench:api`) and from running the compiler
+(`npm run bench:standalone`). Some of what that turned up:
+
+**The zoneless provider is renamed between v19 and v20.**
+
+| API | v17 | v18 | v19 | v20 | v21 | v22 |
+|---|---|---|---|---|---|---|
+| `provideExperimentalZonelessChangeDetection` | – | yes | yes | – | – | – |
+| `provideZonelessChangeDetection` | – | – | – | yes | yes | yes |
+
+Advice to "enable zoneless" without a version breaks on three majors out of six.
+
+**A batch of signal APIs appears exactly at v19**: `linkedSignal`, `resource`, `rxResource`,
+`httpResource`, `afterRenderEffect`, `provideAppInitializer`. The `@Service` decorator exists
+only in 22.0.8.
+
+**Existing is not the same as ready.** The `@experimental` and `@developerPreview` tags live
+only in declaration JSDoc and are invisible at runtime:
+
+| API | v17 | v18 | v19 | v20 | v21 | v22 |
+|---|---|---|---|---|---|---|
+| `input`, `output`, `model`, `viewChild`, `contentChild` | preview | preview | stable | stable | stable | stable |
+| `effect`, `toObservable` | preview | preview | preview | stable | stable | stable |
+| `linkedSignal`, `afterRenderEffect` | – | – | preview | stable | stable | stable |
+| `resource`, `rxResource`, `httpResource` | – | – | **experimental** | **experimental** | **experimental** | stable |
+
+So "rewrite `@Input()` as `input()`" on a v17 or v18 project means moving to a non-public API,
+and `resource()` was experimental all the way through v21.
+
+**Two documentation claims that measurement contradicted:** `standalone` becomes the default at
+**v19**, not v20; and `*ngIf` is not removed in 22.0.8 — it reports hint `NG6385` with severity 4
+and keeps working, with `NgIf` still exported from `@angular/common`.
+
+**Compiler gates**, read in the 22.0.8 bundle and confirmed by running it. All five are keyed on
+`--angularCoreVersion`, and with no version passed the newest semantics are assumed:
+
+| Feature | Gate |
+|---|---|
+| `@if` / `@for` / `@switch` blocks | ≥ 17.0.0 |
+| signals in two-way bindings | ≥ 17.2.0-0 |
+| `@let` | ≥ 18.1.0 |
+| implicit `standalone` | ≥ 19.0.0 |
+| DOM event type assertion | ≥ 20.2.0 |
+
+Outside the measured v17–v22 range `ng_version_rules` returns nothing and says so. Extrapolating
+"it was in v22, so it is in v23" is exactly the failure this tool exists to prevent.
+
+## Honesty as a feature
+
+Every answer that is incomplete says so, in words, inside the answer:
+
+- a component contract whose base class or host directives live elsewhere carries
+  `incomplete: "inputs, outputs and members of base class BaseFieldComponent (imported from
+  './base-field.component') are not collected here — ask ng_component_info about their files"`;
+- `ng_version_rules` reports `notMeasured` topics and a `caveat` when your minor differs from the
+  measured one;
+- `ng_find_usages` labels a declaration as `declaration` rather than a usage, and admits that
+  class-name matches were found without resolving imports;
+- `ng_template_diagnostics` separates three states that all look like an empty list: the template
+  is clean, the server is not answering (caught by a canary probe, because three of the four ways
+  this server fails are completely silent), and template checking is switched off for this project
+  — in which case the answer carries `checksDisabled` naming the tsconfig responsible.
+
+That last one is not theoretical. In the measured monorepo `strictTemplates` is **off in two of
+seven applications and on in the other five**, so an empty list means "checks are disabled" in one
+app and "the template is clean" in the next. Verified against both.
+
+## What this is not
+
+- **`ng_find_usages` is not better than a careful `grep`.** Measured: `grep -rn "<app-widget"`
+  finds exactly the same 62 usages. What the tool adds is that you do not need to know the
+  selector (it is derived from the file), that element/attribute/pipe/class/declaration kinds are
+  labelled, that all four attribute spellings are covered, and that a closing tag is not counted
+  as a second usage.
+- **Not a replacement for the Angular CLI MCP** where that one is available. It requires CLI
+  20.2+, so it cannot serve v17–v19 at all; this bridge covers v17–v22.
+- **Not a type checker of its own.** Everything the LSP-backed tools report comes from the same
+  compiler that builds the project. The value is in delivering it undistorted.
+
+Known gaps, all recorded rather than hidden: base-class members are not collected (91 of 1298
+components in the measured monorepo are flagged for it); topics `forms` and `testing` have no
+measurements; Nx repositories with inferred targets yield projects without `tsConfig`; an
+attribute selector inside a CSS rule in `styles: [...]` counts as a directive usage.
+
+## Requirements and setup
+
+- **Node ≥ 22.22.3.** The lower bound comes from the newest language-server branch, not the oldest.
+- The project's own dependencies: `npm install`, then `npm run build`.
+- The shipped language-server branch lives in `tools/servers/ls22` and needs `npm ci` there once.
+
+`node_modules` folders are not committed, including the twelve inside the stand. To restore the
+full measurement environment:
+
+```
+npm install && npm run build
+cd tools/servers/ls22 && npm ci        # the branch actually shipped
+cd fixtures/v22 && npm ci              # repeat per fixture you want to run
+```
+
+Registering the server with an MCP client:
+
+```json
+{
+  "mcpServers": {
+    "ng-token-saver": {
+      "command": "node",
+      "args": ["<path>/dist/index.js"]
+    }
+  }
+}
+```
+
+## Reproducing the measurements
+
+```
+npm test                                  build plus 107 unit tests (node:test, no dependencies)
+npm run smoke                             end-to-end check with a real MCP client over stdio
+npm run bench:standalone                  where standalone becomes the default (v17..v22)
+npm run bench:api                         which Angular APIs exist in which majors, and their stability
+npm run bench:contract <project root>     contract size against reading whole files
+npm run bench:matrix                      resolution probes across a fixture
+npm run bench:negative                    what the server returns when things break
+npm run bench:didchange                   diagnostics timing after an edit
+```
+
+The stand is `fixtures/v17..v22` — six real Angular workspaces, each with its own `node_modules`
+and its own pinned TypeScript, plus `fixtures/negative/*` for failure cases. Two components in
+the fixtures are probes rather than examples: `standalone-probe.component.ts` measures the
+standalone boundary, and `fixtures/v17/src/app/legacy-card.component.ts` checks that the contract
+does not lose members declared in legacy shapes.
+
+## Status
+
+All six tools work. 107 tests, all green. Verified on six fixtures and on two production
+codebases (1298 and 227 components, zero parse errors), plus one project running Angular 16 to
+check that out-of-range refusals are structured rather than silent.
+
+Measured latency on both production workspaces: the language-server tools pay 8–28 s of cold
+start on the first call and answer in 2–9 ms after it; the four tools that need no server answer
+in 250–600 ms on the first call and in milliseconds once the project's TypeScript is cached.
+
+Not done yet: an idle timeout for language-server sessions, base-class resolution in the
+contract, and the two remaining token-saving scenarios.
+
+`CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
+Russian: the full measurement log, every dead end, and the reasoning behind each decision.
+
+## License
+
+GPL-3.0-or-later — see [LICENSE](LICENSE). Copyright (C) 2026 Alex Ryabov.
+Use and modify freely; derivative works must stay open under the same license.

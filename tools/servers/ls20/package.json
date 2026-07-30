@@ -1,0 +1,8 @@
+﻿{
+    "private":  true,
+    "name":  "ls20",
+    "version":  "0.0.0",
+    "dependencies":  {
+                         "@angular/language-server":  "20.3.0"
+                     }
+}

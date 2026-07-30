@@ -1,0 +1,17 @@
+{
+  "name": "fixture-v22",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Минимальный воркспейс Angular 22 для проб language-server",
+  "dependencies": {
+    "@angular/common": "22.0.8",
+    "@angular/compiler": "22.0.8",
+    "@angular/core": "22.0.8",
+    "rxjs": "7.8.1"
+  },
+  "devDependencies": {
+    "@angular/compiler-cli": "22.0.8",
+    "@angular/language-service": "22.0.8",
+    "typescript": "6.0.3"
+  }
+}

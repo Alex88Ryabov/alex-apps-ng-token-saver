@@ -1,0 +1,15 @@
+# Dependencies, including the twelve node_modules inside the stand (fixtures and server
+# branches). They are ~850 MB and restorable from the committed lockfiles with npm ci.
+node_modules/
+
+# Build output
+dist/
+
+# Local scratch
+.backup/
+*.log
+ssr_error_log.txt
+
+# Editors
+.idea/
+.vscode/

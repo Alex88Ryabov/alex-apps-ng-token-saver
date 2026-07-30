@@ -1,0 +1,9 @@
+<section>
+  <h2>{{ greeting }}</h2>
+  <p>{{ user().fullName }}</p>
+  <span>{{ badge }}</span>
+  <button (click)="onSelect(user().id)">select</button>
+
+  <p>{{ user().emailAddress }}</p>
+  <button (click)="onSelect('not-a-number')">broken</button>
+</section>

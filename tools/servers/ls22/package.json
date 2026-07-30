@@ -1,0 +1,9 @@
+{
+  "name": "ls22",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ветка language-server 22 — базовая линия для фикстуры v22",
+  "dependencies": {
+    "@angular/language-server": "22.0.8"
+  }
+}

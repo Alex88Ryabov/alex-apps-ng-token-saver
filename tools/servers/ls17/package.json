@@ -1,0 +1,9 @@
+{
+  "name": "ls17",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ветка language-server 17 — изолированно от зависимостей фикстуры",
+  "dependencies": {
+    "@angular/language-server": "17.3.2"
+  }
+}

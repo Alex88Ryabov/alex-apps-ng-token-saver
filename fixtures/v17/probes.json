@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "name": "внешний шаблон",
+      "document": "src/app/user-card.component.html",
+      "languageId": "html",
+      "targets": [
+        { "name": "{{ greeting }}", "line": 1, "needle": "greeting", "offset": 2 },
+        { "name": "{{ user() }} -> сигнальный инпут", "line": 2, "needle": "user()", "offset": 1 },
+        { "name": "{{ user().fullName }} -> поле интерфейса", "line": 2, "needle": "fullName", "offset": 2 },
+        { "name": "{{ badge }} -> @Input()", "line": 3, "needle": "badge", "offset": 2 },
+        { "name": "(click)=\"onSelect(...)\"", "line": 4, "needle": "onSelect", "offset": 2 }
+      ]
+    },
+    {
+      "name": "инлайновый шаблон",
+      "document": "src/app/inline-card.component.ts",
+      "languageId": "typescript",
+      "targets": [
+        { "name": "{{ greeting }}", "line": 7, "needle": "greeting", "offset": 2 },
+        { "name": "{{ user() }} -> сигнальный инпут", "line": 8, "needle": "user()", "offset": 1 },
+        { "name": "{{ user().fullName }} -> поле из соседнего файла", "line": 8, "needle": "fullName", "offset": 2 },
+        { "name": "(click)=\"onSelect(...)\"", "line": 9, "needle": "onSelect", "offset": 2 },
+        { "name": "user() в строке с ошибкой", "line": 11, "needle": "user()", "offset": 1 }
+      ]
+    },
+    {
+      "name": "компонент в библиотеке",
+      "document": "projects/ui-kit/src/lib/badge.component.html",
+      "languageId": "html",
+      "targets": [
+        { "name": "{{ label }} -> @Input() библиотеки", "line": 1, "needle": "label", "offset": 2 },
+        { "name": "{{ upper }} -> геттер библиотеки", "line": 2, "needle": "upper", "offset": 2 },
+        { "name": "(click)=\"clear()\"", "line": 3, "needle": "clear", "offset": 2 }
+      ]
+    },
+    {
+      "name": "ngFor глушит соседний резолв",
+      "document": "src/app/blocks-card.component.html",
+      "languageId": "html",
+      "targets": [
+        { "name": "{{ title }} рядом с *ngFor", "line": 1, "needle": "title", "offset": 2 }
+      ]
+    },
+    {
+      "name": "монорепа: path mapping",
+      "document": "projects/ui-kit/src/lib/profile.component.html",
+      "languageId": "html",
+      "targets": [
+        { "name": "{{ user() }} -> сигнальный инпут", "line": 1, "needle": "user()", "offset": 1 },
+        { "name": "fullName -> тип через алиас @fixture/models", "line": 1, "needle": "fullName", "offset": 2 },
+        { "name": "(click)=\"select(...)\"", "line": 2, "needle": "select", "offset": 2 }
+      ]
+    }
+  ]
+}
