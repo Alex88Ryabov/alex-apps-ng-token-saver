@@ -77,6 +77,7 @@ export class NgSession {
   private readonly loadedApps = new Set<string>();
   private ready: Promise<void> | null = null;
   private health: Health = { state: 'warming' };
+  private inFlight = 0;
 
   private constructor(
     readonly workspace: WorkspaceInfo,
@@ -142,39 +143,41 @@ export class NgSession {
   // projectLoadingFinish arrives even for a broken server/project pair, so an empty answer is
   // verified by a canary: a known-valid position in a neighbouring template.
   async healthNear(rawPath: string): Promise<Health> {
-    const path = canonical(rawPath);
-    const area = dirname(path).toLowerCase();
-    const cached = this.areaHealth.get(area);
-    // 'Healthy' is cached forever, 'broken' for a minute: the verdict can be a false alarm from
-    // a race, and caching it forever would disable the tools in a working folder.
-    if (cached && (cached.verdict.state === 'healthy' || Date.now() < cached.until)) {
-      return cached.verdict;
-    }
-    const client = await this.awaitClient();
-    const templates = this.collectCanaries(path);
-    let verdict: Health = {
-      state: 'broken',
-      reason: 'the server started but resolves no symbols in templates near this file',
-      hint: 'usually the tsconfig of the app; some projects stay silent even with a healthy server',
-    };
-    if (templates.length === 0) {
-      // No neighbours, nothing to judge. awaitClient above guards against a dead process:
-      // it throws SessionError, so execution never reaches this line.
-      verdict = { state: 'healthy' };
-    }
-    for (const template of templates) {
-      const position = firstInterpolation(readFileSync(template, 'utf8'));
-      if (!position) {
-        continue;
+    return this.tracked(async () => {
+      const path = canonical(rawPath);
+      const area = dirname(path).toLowerCase();
+      const cached = this.areaHealth.get(area);
+      // 'Healthy' is cached forever, 'broken' for a minute: the verdict can be a false alarm
+      // from a race, and caching it forever would disable the tools in a working folder.
+      if (cached && (cached.verdict.state === 'healthy' || Date.now() < cached.until)) {
+        return cached.verdict;
       }
-      const outcome = await this.definitionWith(client, template, position);
-      if (outcome.length > 0) {
+      const client = await this.awaitClient();
+      const templates = this.collectCanaries(path);
+      let verdict: Health = {
+        state: 'broken',
+        reason: 'the server started but resolves no symbols in templates near this file',
+        hint: 'usually the tsconfig of the app; some projects stay silent even with a healthy server',
+      };
+      if (templates.length === 0) {
+        // No neighbours, nothing to judge. awaitClient above guards against a dead process:
+        // it throws SessionError, so execution never reaches this line.
         verdict = { state: 'healthy' };
-        break;
       }
-    }
-    this.areaHealth.set(area, { verdict, until: Date.now() + BROKEN_VERDICT_TTL_MS });
-    return verdict;
+      for (const template of templates) {
+        const position = firstInterpolation(readFileSync(template, 'utf8'));
+        if (!position) {
+          continue;
+        }
+        const outcome = await this.definitionWith(client, template, position);
+        if (outcome.length > 0) {
+          verdict = { state: 'healthy' };
+          break;
+        }
+      }
+      this.areaHealth.set(area, { verdict, until: Date.now() + BROKEN_VERDICT_TTL_MS });
+      return verdict;
+    });
   }
 
   // An app is the nearest ancestor holding tsconfig.json; a monorepo has several.
@@ -273,8 +276,10 @@ export class NgSession {
   }
 
   async definitionAt(rawPath: string, position: Position): Promise<LocationHit[]> {
-    const client = await this.awaitClient();
-    return this.definitionWith(client, canonical(rawPath), position);
+    return this.tracked(async () => {
+      const client = await this.awaitClient();
+      return this.definitionWith(client, canonical(rawPath), position);
+    });
   }
 
   private async definitionWith(
@@ -309,34 +314,52 @@ export class NgSession {
   }
 
   async hoverAt(rawPath: string, position: Position): Promise<string | null> {
-    const path = canonical(rawPath);
-    const client = await this.awaitClient();
-    await this.syncPair(client, path);
-    const outcome = await client.request('textDocument/hover', {
-      textDocument: { uri: uriOf(path) },
-      position,
+    return this.tracked(async () => {
+      const path = canonical(rawPath);
+      const client = await this.awaitClient();
+      await this.syncPair(client, path);
+      const outcome = await client.request('textDocument/hover', {
+        textDocument: { uri: uriOf(path) },
+        position,
+      });
+      if (outcome.error || !outcome.result) {
+        return null;
+      }
+      return flattenHover(outcome.result as HoverResult);
     });
-    if (outcome.error || !outcome.result) {
-      return null;
-    }
-    return flattenHover(outcome.result as HoverResult);
   }
 
   // A template and its companion .ts are checked together: template diagnostics need the class.
   async diagnosticsFor(rawPath: string): Promise<Diagnostic[]> {
-    const path = canonical(rawPath);
-    const client = await this.awaitClient();
-    const since = Date.now();
-    const wasOpen = this.open.has(pathKey(path));
-    await this.syncPair(client, path);
-    const changed = this.open.get(pathKey(path))?.version ?? 1;
-    // Short path only if a push already arrived: another tool may have opened the file, and then
-    // 'empty' means 'not computed yet', not 'no errors'.
-    if (wasOpen && changed === 1 && client.hadDiagnosticsPush(path)) {
+    return this.tracked(async () => {
+      const path = canonical(rawPath);
+      const client = await this.awaitClient();
+      const since = Date.now();
+      const wasOpen = this.open.has(pathKey(path));
+      await this.syncPair(client, path);
+      const changed = this.open.get(pathKey(path))?.version ?? 1;
+      // Short path only if a push already arrived: another tool may have opened the file, and
+      // then 'empty' means 'not computed yet', not 'no errors'.
+      if (wasOpen && changed === 1 && client.hadDiagnosticsPush(path)) {
+        return client.diagnosticsFor(path) ?? [];
+      }
+      await client.waitForNextDiagnostics(path, since, DIAGNOSTICS_TIMEOUT_MS);
       return client.diagnosticsFor(path) ?? [];
+    });
+  }
+
+  // The idle sweep must not kill a session mid-call: a cold project load takes two minutes.
+  isBusy(): boolean {
+    return this.inFlight > 0;
+  }
+
+  private async tracked<T>(work: () => Promise<T>): Promise<T> {
+    this.inFlight += 1;
+    try {
+      return await work();
+    } finally {
+      this.inFlight -= 1;
     }
-    await client.waitForNextDiagnostics(path, since, DIAGNOSTICS_TIMEOUT_MS);
-    return client.diagnosticsFor(path) ?? [];
   }
 
   // The process can die after a successful start, and health must notice that.

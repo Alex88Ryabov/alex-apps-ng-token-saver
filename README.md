@@ -187,10 +187,25 @@ Registering the server with an MCP client:
 }
 ```
 
+With Claude Code that is one command:
+
+```
+claude mcp add ng-token-saver -- node <path>/dist/index.js
+```
+
+Configuration, both variables optional:
+
+- `NG_TOKEN_SAVER_IDLE_MS` — a language-server session unused this long shuts its ngserver
+  down, and the next call pays the cold start again. Default 900000 (15 minutes — chosen,
+  not measured); `0` keeps sessions alive until the server exits. A session with a call in
+  flight is never shut down.
+- `NG_TOKEN_SAVER_SERVERS_DIR` — where the language-server branch lives, if not in
+  `tools/servers` next to the build.
+
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 107 unit tests (node:test, no dependencies)
+npm test                                  build plus 118 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
 npm run bench:api                         which Angular APIs exist in which majors, and their stability
@@ -208,16 +223,18 @@ does not lose members declared in legacy shapes.
 
 ## Status
 
-All six tools work. 107 tests, all green. Verified on six fixtures and on two production
+All six tools work. 118 tests, all green. Verified on six fixtures and on two production
 codebases (1298 and 227 components, zero parse errors), plus one project running Angular 16 to
 check that out-of-range refusals are structured rather than silent.
 
 Measured latency on both production workspaces: the language-server tools pay 8–28 s of cold
 start on the first call and answer in 2–9 ms after it; the four tools that need no server answer
 in 250–600 ms on the first call and in milliseconds once the project's TypeScript is cached.
+A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
+so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
 
-Not done yet: an idle timeout for language-server sessions, base-class resolution in the
-contract, and the two remaining token-saving scenarios.
+Not done yet: base-class resolution in the contract, and the two remaining token-saving
+scenarios.
 
 `CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
 Russian: the full measurement log, every dead end, and the reasoning behind each decision.

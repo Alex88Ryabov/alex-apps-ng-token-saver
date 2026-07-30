@@ -100,6 +100,29 @@ test('the template is opened before its companion', async () => {
   assert.match(opened[1], /\.ts$/);
 });
 
+// The registry's idle sweep skips busy sessions; busy must cover the whole call, not just
+// the request round-trip.
+test('a session with a call in flight reports busy', async () => {
+  let release;
+  const gate = new Promise((resolveGate) => {
+    release = resolveGate;
+  });
+  const client = fakeClient({
+    async waitForNextDiagnostics() {
+      client.pushed.add(template);
+      await gate;
+      return true;
+    },
+  });
+  const session = sessionWith(client);
+  assert.equal(session.isBusy(), false);
+  const pending = session.diagnosticsFor(template);
+  assert.equal(session.isBusy(), true);
+  release();
+  await pending;
+  assert.equal(session.isBusy(), false);
+});
+
 test('a process death after startup is visible from the outside', async () => {
   const client = fakeClient();
   const session = sessionWith(client);

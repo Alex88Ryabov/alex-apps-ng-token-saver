@@ -24,6 +24,7 @@ import {
   toolError,
   type ToolResult,
 } from './format.js';
+import { SessionRegistry } from './lsp/registry.js';
 import { NgSession, SessionError } from './lsp/session.js';
 import { locateProject, WorkspaceError } from './lsp/workspace.js';
 import { findUsages, targetFromSelector, targetOf } from './find-usages.js';
@@ -33,24 +34,18 @@ import { describeWorkspaceMap } from './workspace-map.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const serversDir = process.env['NG_TOKEN_SAVER_SERVERS_DIR'] ?? join(here, '..', 'tools', 'servers');
 
-const sessions = new Map<string, NgSession>();
-
-function sessionFor(file: string): NgSession {
-  const existing = [...sessions.entries()].find(([root]) => belongsTo(file, root));
-  if (existing) {
-    const [root, session] = existing;
-    if (session.getHealth().state !== 'broken' && !session.isDead()) {
-      return session;
-    }
-    // A broken session never heals itself, so drop it and start a fresh one.
-    session.dispose();
-    sessions.delete(root);
-  }
-  const session = NgSession.create(dirname(file), serversDir);
-  session.start();
-  sessions.set(session.workspace.root.toLowerCase(), session);
-  return session;
-}
+// A session unused this long shuts its ngserver down; the next call pays the cold start
+// again. Chosen, not measured. Override with NG_TOKEN_SAVER_IDLE_MS; 0 disables the shutdown.
+const DEFAULT_IDLE_MS = 15 * 60_000;
+const rawIdleMs = Number(process.env['NG_TOKEN_SAVER_IDLE_MS'] ?? DEFAULT_IDLE_MS);
+const registry = new SessionRegistry(
+  (file) => {
+    const session = NgSession.create(dirname(file), serversDir);
+    session.start();
+    return session;
+  },
+  Number.isFinite(rawIdleMs) && rawIdleMs >= 0 ? rawIdleMs : DEFAULT_IDLE_MS,
+);
 
 // resolve() even on an absolute path: an agent sends d:/a/b, our registries are keyed by
 // d:\a\b, and a raw string would miss the session lookup — spawning a fresh server per call.
@@ -88,7 +83,7 @@ server.registerTool(
   async ({ file, line, character }) => {
     try {
       const path = resolveFile(file);
-      const session = sessionFor(path);
+      const session = registry.acquire(path);
       const [hit] = await session.definitionAt(path, { line, character });
       if (!hit) {
         // An empty answer is indistinguishable from a failure, so we check with a canary.
@@ -127,7 +122,7 @@ server.registerTool(
   async ({ file }) => {
     try {
       const path = resolveFile(file);
-      const session = sessionFor(path);
+      const session = registry.acquire(path);
       const list = await session.diagnosticsFor(path);
       if (list.length === 0) {
         // 'No errors' only means anything when the server is healthy.
@@ -303,9 +298,7 @@ server.registerTool(
 // Child ngserver processes do not outlive the parent quietly, so we kill them explicitly.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    for (const session of sessions.values()) {
-      session.dispose();
-    }
+    registry.disposeAll();
     process.exit(0);
   });
 }
