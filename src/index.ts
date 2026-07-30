@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Copyright (C) 2026 Alex Ryabov
 // SPDX-License-Identifier: GPL-3.0-or-later
 

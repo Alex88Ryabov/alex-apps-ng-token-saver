@@ -4,6 +4,7 @@
 // Workspace discovery: Angular major, server branch selection, probe locations.
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 
 /** What we know about a project without starting the server is enough for TS AST parsing. */
@@ -97,17 +98,37 @@ function pickServerDir(major: number, serversDir: string, declared: string | nul
     );
   }
   const dir = join(serversDir, NEWEST_BRANCH);
-  // Check both packages: require.resolve walks up the tree and would silently pick up
-  // someone else's language-service if ours is missing.
-  for (const pkg of ['language-server', 'language-service']) {
-    if (!existsSync(join(dir, 'node_modules', '@angular', pkg))) {
-      throw new WorkspaceError(
-        `server branch ${NEWEST_BRANCH} has no @angular/${pkg}`,
-        `run npm install in ${dir}`,
-      );
-    }
+  // Check both packages: a probe location missing language-service kills the process in
+  // ~200 ms, so the pair must sit flat in one node_modules.
+  const complete = ['language-server', 'language-service'].every((pkg) =>
+    existsSync(join(dir, 'node_modules', '@angular', pkg)),
+  );
+  if (complete) {
+    return dir;
   }
-  return dir;
+  // The npm-installed package does not ship tools/servers: there the server is a regular
+  // dependency of the package itself, flat in whichever node_modules npm put it into.
+  const installed = installedServerDir();
+  if (installed) {
+    return installed;
+  }
+  throw new WorkspaceError(
+    `server branch ${NEWEST_BRANCH} is not installed and @angular/language-server does not resolve`,
+    `run npm install in ${dir}, or reinstall the package dependencies`,
+  );
+}
+
+function installedServerDir(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require.resolve('@angular/language-server/package.json');
+    // .../<dir>/node_modules/@angular/language-server/package.json -> <dir>
+    const dir = dirname(dirname(dirname(dirname(pkg))));
+    const flat = existsSync(join(dir, 'node_modules', '@angular', 'language-service'));
+    return flat ? dir : null;
+  } catch {
+    return null;
+  }
 }
 
 export function locateProject(anyPathInside: string): ProjectInfo {

@@ -1,11 +1,22 @@
 {
   "name": "@alex-apps/ng-token-saver",
   "version": "0.1.0",
-  "private": true,
   "description": "MCP server for Angular: compiler-backed template answers, component contracts and version-accurate facts that save AI agents tokens",
   "license": "GPL-3.0-or-later",
   "author": "Alex Ryabov",
   "keywords": ["angular", "mcp", "mcp-server", "ai-agents", "language-server", "lsp", "tokens"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alex88Ryabov/alex-apps-ng-token-saver.git"
+  },
+  "homepage": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver#readme",
+  "bugs": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver/issues",
+  "engines": {
+    "node": ">=22.22.3"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "bin": {
     "ng-token-saver": "dist/index.js"
@@ -26,6 +37,7 @@
     "bench:api": "node tools/probe-api.mjs"
   },
   "dependencies": {
+    "@angular/language-server": "22.0.8",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.4.3"
   },

@@ -221,6 +221,19 @@ directive usage.
 ## Requirements and setup
 
 - **Node ≥ 22.22.3.** The lower bound comes from the newest language-server branch, not the oldest.
+
+**From npm** — the language server ships as a regular dependency, nothing else to install:
+
+```
+npm install -g @alex-apps/ng-token-saver
+```
+
+After that every client config below shortens to `"command": "ng-token-saver"` with no args.
+The installed layout is verified by running: the packed tarball (75 kB, dist only) was
+installed into a clean prefix and all four tool kinds answered through a real MCP client.
+
+**From source:**
+
 - The project's own dependencies: `npm install`, then `npm run build`.
 - The shipped language-server branch lives in `tools/servers/ls22` and needs `npm ci` there once.
 
