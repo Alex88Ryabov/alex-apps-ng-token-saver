@@ -24,6 +24,165 @@ async function workspace(files) {
 const scan = (root, target, extra = {}) =>
   findUsages(root, target, { limit: 100, fileLimit: 1000, ...extra });
 
+// ---- The input filter: only tags that bind the name, each entry at the binding itself ----
+
+test('input filter: the entry points at the binding line, not the tag line', async () => {
+  const root = await workspace({
+    'app/list.component.html': `<app-card\n  [title]="t"\n  [icon]="i">\n</app-card>\n<app-card [title]="t"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 1, 'only the tag that binds icon counts');
+    assert.deepEqual(
+      report.usages.map((item) => [item.kind, item.line]),
+      [['binding', 3]],
+    );
+    assert.match(report.incomplete, /input 'icon': bound in 1 of 2 tag usages/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: static, event and banana spellings all count', async () => {
+  const root = await workspace({
+    'a.html': `<app-card icon="check"></app-card>`,
+    'b.html': `<app-card [(icon)]="x"></app-card>`,
+    'c.html': `<app-card (icon)="onIcon()"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 3);
+    assert.ok(report.usages.every((item) => item.kind === 'binding'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: a same-named binding on a foreign tag does not count', async () => {
+  const root = await workspace({
+    'a.html': `<other-widget [icon]="x"></other-widget>\n<app-card [title]="t"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 0);
+    assert.match(report.incomplete, /bound in 0 of 1 tag usages/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: a quoted > does not close the tag early', async () => {
+  const root = await workspace({
+    'a.html': `<app-card [visible]="a > b" [icon]="i"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: a name that is only a substring does not match', async () => {
+  const root = await workspace({
+    'a.html': `<app-card [iconColor]="c" myicon="x"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Review 10 MAJOR: the backward search for the tag start ignored quotes, so an earlier
+// attribute value containing '<' (*ngIf="count < 5") derailed the quote parity of the
+// span; with a quoted '>' next, the span closed early and the binding after it was lost.
+// The reviewer's exact arrangement happened to survive - this one reproduces the loss.
+test('input filter: quoted < and > before the binding do not lose it', async () => {
+  const root = await workspace({
+    'a.html': `<div *ngIf="count < 5" appTooltip [x]="1 > 2" [tooltipText]="msg"></div>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('[appTooltip]'), { input: 'tooltipText' });
+    assert.equal(report.total, 1, 'the binding is there and must be found');
+    assert.equal(report.usages[0]?.kind, 'binding');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Review 10 MAJOR: the lookbehind allowed quotes, so text inside ANOTHER attribute's value
+// ("icon = special formula") passed as a static binding.
+test('input filter: text inside another attribute value is not a binding', async () => {
+  const root = await workspace({
+    'a.html': `<app-card title="icon = special formula" [config]="1"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Review 10: one physical tag matching both the element and the attribute pattern must
+// count once in the denominator of the note, exactly like it does in the numerator.
+test('input filter: a tag matching element and attribute counts once in the note', async () => {
+  const root = await workspace({
+    'a.html': `<button appButton [x]="1"></button>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('button[appButton]'), { input: 'x' });
+    assert.match(report.incomplete, /bound in 1 of 1 tag usages/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The canonical prefix spellings are legal Angular; review 10 caught them missing.
+test('input filter: canonical bind-/on-/bindon- spellings count', async () => {
+  const root = await workspace({
+    'a.html': `<app-card bind-icon="i"></app-card>`,
+    'b.html': `<app-card on-icon="h()"></app-card>`,
+    'c.html': `<app-card bindon-icon="m"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: 'icon' });
+    assert.equal(report.total, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: an empty name is refused in words, not applied silently', async () => {
+  const root = await workspace({
+    'a.html': `<app-card [icon]="i"></app-card>`,
+  });
+  try {
+    const report = scan(root, targetFromSelector('app-card'), { input: '  ' });
+    assert.match(report.incomplete, /needs a non-empty name/);
+    assert.equal(report.total, 1, 'usages stay unfiltered');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('input filter: on a pipe target it is refused in words, not applied silently', async () => {
+  const root = await workspace({
+    'a.html': `{{ price | money }}`,
+  });
+  try {
+    // A bare-word selector would also read as an element; a pure pipe target comes from @Pipe.
+    const target = { elements: [], attributes: [], pipes: ['money'], classNames: [] };
+    const report = scan(root, target, { input: 'icon' });
+    assert.equal(report.total, 1, 'usages stay unfiltered');
+    assert.match(report.incomplete, /needs an element or attribute selector target/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a selector is split into elements and attributes, and :not does not count', () => {
   assert.deepEqual(parseSelector('app-user-card'), { elements: ['app-user-card'], attributes: [] });
   assert.deepEqual(parseSelector('[appDrag]'), { elements: [], attributes: ['appDrag'] });

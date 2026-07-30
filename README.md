@@ -37,7 +37,7 @@ Six tools, 1093 characters of descriptions in total. Answers are dense JSON with
 | `ng_component_info` | the public contract of a component or directive | no |
 | `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
 | `ng_version_rules` | what exists and what does not in this project's Angular version | no |
-| `ng_find_usages` | where a component, directive or pipe is used | no |
+| `ng_find_usages` | where a component, directive or pipe is used; with `input` — where that input is bound | no |
 
 Four of the six never start the language server, so they answer in milliseconds and keep
 working on workspaces where the server refuses to load.
@@ -92,26 +92,26 @@ the source grows with method bodies, and on production code the second wins almo
 **Renaming an input across usages** (`npm run bench:rename <component> <input>`). The grep path
 an agent actually takes — read the component file to learn the selector, then grep the selector
 and the binding spellings of the input repo-wide — against `ng_component_info` plus
-`ng_find_usages`. Neither path performs the rename; measured is the cost of locating candidate
-sites. On the production monorepo, 6243 files scanned:
+`ng_find_usages` with its `input` filter: only the tag usages that bind the name come back, and
+each entry points at the binding itself (in a multi-line tag that is a different line than the
+tag's). Both sides deliver binding-shaped locations, so the comparison is like-for-like; what
+still differs is attribution, and it favours the bridge in correctness: grep's binding lines
+are repo-wide and unattributed, the bridge's are scoped to this component's tags. On the
+production monorepo, 6243 files scanned:
 
-| Component | grep path | bridge | saved (o200k, upper bound) |
+| Component | grep path | bridge | saved (o200k) |
 |---|---|---|---|
-| 466 usages, input `icon` | 41 698 tokens | 22 756 tokens | **45%** |
-| 577 usages, input `mask` | 50 527 tokens | 25 863 tokens | 49%\* |
-| 1211 usages, input `name` | 129 227 tokens | 28 207 tokens | 78%\* |
+| 577 usages, `mask` bound on 5 tags | 50 527 tokens | 1 035 tokens | **98%** |
+| 466 usages, `icon` bound on 463 tags | 41 698 tokens | 22 566 tokens | **46%** |
+| 1211 usages, `name` bound on 1134 tags | 129 227 tokens | 30 650 tokens | 76%\* |
 
-\* the tool caps an answer at 500 usages, so on these two components it returned fewer sites
-than grep printed — part of that saving is truncation, and it is marked rather than hidden.
+\* the tool returns at most 500 entries per answer, and the answer says so.
 
-**Why "upper bound":** the two answers are not the same depth. `ng_find_usages` locates
-component usages — the element tag — and knows nothing about the input, while the binding grep
-already narrows to binding-shaped lines. Each path leaves different residual work: after the
-bridge the agent still checks, per usage, whether this input is bound there; after the grep it
-still attributes each binding line to the right component — on the `icon` run the grep produced
-674 binding lines against 466 component usages, and only the 196 sitting in files without the
-selector are provably somebody else's. Neither residual is measured, so read the percentages as
-the bridge's ceiling, not a like-for-like verdict.
+The spread is the finding: the saving is decided by how many of the component's usages actually
+bind the input. `mask` is bound on 5 of 568 tags — grep still prints every selector line plus
+67 binding-shaped lines from across the repo, 62 of them somebody else's `mask`, while the
+bridge answers with exactly those five sites. On `icon`, bound on practically every tag, both
+paths carry similar volume and the bridge wins by a third.
 
 **Diagnosing a template that will not compile** (`npm run bench:diagnose`). The compiler listing
 — ngc over the whole fixture, ANSI stripped, which is a conservative floor for a real `ng build`
@@ -175,9 +175,11 @@ Outside the measured v17–v22 range `ng_version_rules` returns nothing and says
 
 Every answer that is incomplete says so, in words, inside the answer:
 
-- a component contract merges the members of its base classes (resolved statically through
-  relative imports and tsconfig aliases); when a link in the chain leads into a package or a
-  mixin call, the walk stops and the answer says so:
+- a component contract merges the members of its base classes and the exposed inputs/outputs
+  of its host directives, typed from their classes (resolved statically through relative
+  imports and tsconfig aliases; a bare host-directive reference exposes nothing bindable, which
+  is Angular's own rule); when a link leads into a package or a mixin call, the walk stops and
+  the answer says so:
   `incomplete: "inputs, outputs and members of base class CdkTree (imported from
   '@angular/cdk/tree') are not collected here — ask ng_component_info about their files"`;
 - `ng_version_rules` reports `notMeasured` topics and a `caveat` when your minor differs from the
@@ -209,12 +211,12 @@ app and "the template is clean" in the next. Verified against both.
 - **Not a type checker of its own.** Everything the LSP-backed tools report comes from the same
   compiler that builds the project. The value is in delivering it undistorted.
 
-Known gaps, all recorded rather than hidden: host-directive members are not collected (the
-contract names the directives instead); a base class from a package or behind a mixin call
-stops the ancestor walk (1 of 1298 components in the measured monorepo); topics `forms` and
-`testing` have no measurements; Nx repositories with inferred targets yield projects without
-`tsConfig`; an attribute selector inside a CSS rule in `styles: [...]` counts as a directive
-usage.
+Known gaps, all recorded rather than hidden: an exposure on a host directive from a package
+keeps its name but not its type, and nested host directives are not expanded (the answer says
+so); a base class from a package or behind a mixin call stops the ancestor walk (1 of 1298
+components in the measured monorepo); topics `forms` and `testing` have no measurements; Nx
+repositories with inferred targets yield projects without `tsConfig`; an attribute selector
+inside a CSS rule in `styles: [...]` counts as a directive usage.
 
 ## Requirements and setup
 
@@ -262,7 +264,7 @@ Configuration, both variables optional:
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 129 unit tests (node:test, no dependencies)
+npm test                                  build plus 144 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
 npm run bench:api                         which Angular APIs exist in which majors, and their stability
@@ -282,7 +284,7 @@ does not lose members declared in legacy shapes.
 
 ## Status
 
-All six tools work. 129 tests, all green. Verified on six fixtures and on two production
+All six tools work. 144 tests, all green. Verified on six fixtures and on two production
 codebases (1298 and 407 components, zero parse errors), plus one project running Angular 16 to
 check that out-of-range refusals are structured rather than silent.
 
@@ -292,7 +294,8 @@ in 250–600 ms on the first call and in milliseconds once the project's TypeScr
 A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
 so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
 
-Not done yet: host-directive members in the contract.
+Not done yet: the `forms` and `testing` topics of `ng_version_rules` have no measurements, and
+two timing constants in the session layer are chosen rather than measured.
 
 `CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
 Russian: the full measurement log, every dead end, and the reasoning behind each decision.

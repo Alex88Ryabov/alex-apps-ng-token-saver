@@ -5,9 +5,25 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describeWorkspace, firstInterpolation, WorkspaceError } from '../dist/lsp/workspace.js';
+import { describeWorkspace, firstInterpolation, locateProject, WorkspaceError } from '../dist/lsp/workspace.js';
 
 const servers = resolve('tools/servers');
+
+// The negative fixtures sit inside this repository, so the upward walk finds OUR
+// node_modules: the verdict 'not an Angular workspace' is right, but the folder named in
+// the message is a stranger's. The message must also say where the search started.
+test('the refusal names the path the search started from', () => {
+  const inside = resolve('fixtures/negative/orphan/src/app/user-card.component.ts');
+  assert.throws(
+    () => locateProject(inside),
+    (error) => {
+      assert.ok(error instanceof WorkspaceError);
+      assert.match(error.message, /no @angular\/core/);
+      assert.ok(error.message.includes(inside), 'the start path must be in the message');
+      return true;
+    },
+  );
+});
 
 test('the workspace root is searched upwards from the file', () => {
   const info = describeWorkspace(resolve('fixtures/v19/src/app'), servers);

@@ -264,17 +264,28 @@ test('the partial contract is spelled out in the answer, not hidden in the exten
   `);
   assert.match(local.incomplete, /base class LocalBase are not collected here/);
 
+  // A bare reference exposes nothing bindable, so the raw contract must not flag it either
+  // (review 10: the exposure semantics had reached resolveAncestors but not contractOf).
   const hosted = one(`
     @Component({ selector: 'a-b', template: '', hostDirectives: [CdkDrag, Toggleable] })
     export class C {}
   `);
-  assert.match(hosted.incomplete, /host directives CdkDrag, Toggleable/);
+  assert.equal(hosted.incomplete, null);
+
+  const exposed = one(`
+    @Component({ selector: 'a-b', template: '',
+      hostDirectives: [CdkDrag, { directive: Toggleable, inputs: ['checked'] }] })
+    export class C {}
+  `);
+  assert.match(exposed.incomplete, /host directives Toggleable/);
+  assert.ok(!exposed.incomplete.includes('CdkDrag'), 'the bare reference must not be flagged');
 
   const both = one(`
     @Component({ selector: 'a-b', template: '', hostDirectives: [CdkDrag] })
     export class C extends BaseFieldComponent {}
   `);
-  assert.match(both.incomplete, /base class BaseFieldComponent and host directives CdkDrag/);
+  assert.match(both.incomplete, /base class BaseFieldComponent/);
+  assert.ok(!both.incomplete.includes('CdkDrag'));
 
   // A complete contract stays quiet: the flag must not sit on every component.
   const complete = one(`
@@ -591,10 +602,9 @@ test('ancestors: a mixin call is not resolvable by design', async () => {
   }
 });
 
-// Review 8 BLOCKER: host directives are inherited in Angular, so an ancestor's own
-// hostDirectives must surface in the contract and in incomplete - silently dropping them
-// makes a partial contract look complete.
-test('ancestors: host directives of an ancestor are named, not silently dropped', async () => {
+// Host directives are inherited in Angular, so an ancestor's surface in the contract. A bare
+// reference exposes nothing bindable - so unlike before, it does not flag incompleteness.
+test('ancestors: a bare host directive of an ancestor is named and flags nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
   try {
     await writeFile(
@@ -617,9 +627,125 @@ test('ancestors: host directives of an ancestor are named, not silently dropped'
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
     assert.deepEqual(complete.ancestors, ['Base']);
     assert.deepEqual(complete.hostDirectives, ['CdkDrag']);
+    assert.equal(complete.incomplete, null, 'a bare reference exposes nothing bindable');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The object form exposes listed inputs/outputs, renames included; types come from the
+// directive class resolved with the same static machinery, its own extends chain included.
+test('host directives: exposed inputs and outputs join the contract with types', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'drag-base.ts'),
+      `import { Directive, Input } from '@angular/core';
+       @Directive()
+       export class DragBase {
+         @Input() axis: 'x' | 'y' = 'x';
+       }`,
+    );
+    await writeFile(
+      join(dir, 'drag.directive.ts'),
+      `import { Directive, EventEmitter, Input, Output } from '@angular/core';
+       import { DragBase } from './drag-base';
+       @Directive({ selector: '[appDrag]' })
+       export class DragDirective extends DragBase {
+         @Input('dragDisabled') disabled = false;
+         @Output() dropped = new EventEmitter<number>();
+       }`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { DragDirective } from './drag.directive';
+       @Component({
+         selector: 'a-b',
+         template: '',
+         hostDirectives: [
+           { directive: DragDirective, inputs: ['dragDisabled: frozen', 'axis'], outputs: ['dropped'] },
+         ],
+       })
+       export class C {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(
+      complete.inputs.map((item) => [item.name, item.type]),
+      [
+        ['frozen', 'boolean'],
+        ['axis', `'x' | 'y'`],
+      ],
+    );
+    assert.deepEqual(complete.outputs.map((item) => [item.name, item.type]), [['dropped', 'number']]);
+    assert.equal(complete.incomplete, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Review 10: the directive itself resolves but its own extends chain breaks on a package
+// base. The exposure comes out untyped, and without a word in incomplete that would be
+// indistinguishable from a typo in the exposure list.
+test('host directives: a broken chain inside the directive is named in incomplete', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'drag.directive.ts'),
+      `import { Directive } from '@angular/core';
+       import { PkgBase } from '@some/pkg';
+       @Directive({ selector: '[appDrag]' })
+       export class DragDirective extends PkgBase {}`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { DragDirective } from './drag.directive';
+       @Component({
+         selector: 'a-b',
+         template: '',
+         hostDirectives: [{ directive: DragDirective, inputs: ['axis'] }],
+       })
+       export class C {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(
+      complete.inputs.map((item) => [item.name, item.type]),
+      [['axis', null]],
+    );
+    assert.match(complete.incomplete, /host directives DragDirective \(imported from '\.\/drag\.directive'\)/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// An exposure on a directive from a package: the names are still known from the local
+// decorator and stay bindable, but their types are not - and the answer says so.
+test('host directives: an unresolvable directive keeps exposed names and flags incomplete', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { CdkMenuTrigger } from '@angular/cdk/menu';
+       @Component({
+         selector: 'a-b',
+         template: '',
+         hostDirectives: [{ directive: CdkMenuTrigger, inputs: ['cdkMenuTriggerFor: menu'] }],
+       })
+       export class C {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(
+      complete.inputs.map((item) => [item.name, item.type]),
+      [['menu', null]],
+    );
     assert.match(
       complete.incomplete,
-      /host directives CdkDrag \(imported from '@angular\/cdk\/drag-drop'\)/,
+      /host directives CdkMenuTrigger \(imported from '@angular\/cdk\/menu'\)/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

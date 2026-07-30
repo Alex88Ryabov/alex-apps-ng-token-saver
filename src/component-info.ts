@@ -44,7 +44,7 @@ export interface ComponentContract {
   inlineTemplate: boolean;
   styleUrls: string[];
   imports: string[];
-  /** Their inputs and outputs are not collected here: a non-empty list means the contract is partial. */
+  /** Host directive names; resolveAncestors merges what their object form exposes. */
   hostDirectives: string[];
   /** The direct base class as written; resolveAncestors merges its members when it can. */
   extends: string | null;
@@ -175,7 +175,7 @@ function contractOf(
   const written = boolProp(ts, meta, 'standalone');
   const styleUrl = stringProp(ts, meta, 'styleUrl');
   const baseClass = baseClassOf(ts, node);
-  const hostDirectives = hostDirectivesOf(ts, meta);
+  const hostDirectiveSpecs = hostDirectiveSpecsOf(ts, meta);
   const members = collectMembers(ts, node, meta);
 
   return {
@@ -189,11 +189,11 @@ function contractOf(
     inlineTemplate: propOf(ts, meta, 'template') !== null,
     styleUrls: [...stringArrayProp(ts, meta, 'styleUrls'), ...(styleUrl ? [styleUrl] : [])],
     imports: textArrayProp(ts, meta, 'imports'),
-    hostDirectives,
+    hostDirectives: hostDirectiveSpecs.map((spec) => spec.name),
     extends: baseClass,
     ancestors: null,
     ...members,
-    incomplete: incompletenessOf(ts, node.getSourceFile(), baseClass, hostDirectives),
+    incomplete: incompletenessOf(ts, node.getSourceFile(), baseClass, hostDirectiveSpecs),
   };
 }
 
@@ -256,15 +256,17 @@ function incompletenessOf(
   ts: TypeScriptApi,
   source: TS.SourceFile,
   baseClass: string | null,
-  hostDirectives: string[],
+  hostDirectives: HostDirectiveSpec[],
 ): string | null {
   const sources: string[] = [];
   if (baseClass) {
     sources.push(`base class ${namedWithImport(ts, source, baseClass)}`);
   }
-  if (hostDirectives.length > 0) {
+  // A bare reference exposes nothing bindable and is not a source of incompleteness.
+  const exposed = hostDirectives.filter((spec) => spec.inputs.length > 0 || spec.outputs.length > 0);
+  if (exposed.length > 0) {
     sources.push(
-      `host directives ${hostDirectives.map((item) => namedWithImport(ts, source, item)).join(', ')}`,
+      `host directives ${exposed.map((spec) => namedWithImport(ts, source, spec.name)).join(', ')}`,
     );
   }
   return incompleteMessage(sources);
@@ -606,18 +608,33 @@ function textArrayProp(
   return value.elements.map((item) => item.getText().replace(/\s+/g, ' '));
 }
 
-// Host directives bring their own inputs and outputs. We cannot expand them - they live in
-// another file - but we must name them, or the contract looks complete while bindings are missing.
-function hostDirectivesOf(ts: TypeScriptApi, meta: TS.ObjectLiteralExpression | null): string[] {
+interface HostDirectiveSpec {
+  name: string;
+  /** Exposure lists as written: 'inner' or 'inner: outer'. Empty means nothing is bindable. */
+  inputs: string[];
+  outputs: string[];
+}
+
+// Angular exposes a host directive's inputs and outputs only when they are listed in the
+// object form; a bare class reference applies the directive but exposes nothing bindable.
+function hostDirectiveSpecsOf(ts: TypeScriptApi, meta: TS.ObjectLiteralExpression | null): HostDirectiveSpec[] {
   const value = propOf(ts, meta, 'hostDirectives');
   if (!value || !ts.isArrayLiteralExpression(value)) {
     return [];
   }
   return value.elements.map((item) => {
-    const named = ts.isObjectLiteralExpression(item) ? propOf(ts, item, 'directive') : null;
-    return (named ?? item).getText().replace(/\s+/g, ' ');
+    if (!ts.isObjectLiteralExpression(item)) {
+      return { name: item.getText().replace(/\s+/g, ' '), inputs: [], outputs: [] };
+    }
+    const named = propOf(ts, item, 'directive');
+    return {
+      name: (named ?? item).getText().replace(/\s+/g, ' '),
+      inputs: stringArrayProp(ts, item, 'inputs'),
+      outputs: stringArrayProp(ts, item, 'outputs'),
+    };
   });
 }
+
 
 // The legacy form declares the input in the decorator and the field in the class. Take the type
 // from the parsed member and remove it from publicMembers so the field is not listed twice.
@@ -645,17 +662,19 @@ function declaredInMeta(
 // A chain deeper than this is treated as unresolvable; nothing real comes close.
 const ANCESTOR_DEPTH_LIMIT = 10;
 
-// Walks the extends chain and merges inherited inputs, outputs and members into the contract.
-// Resolution is deliberately static - the same file, a relative import, a tsconfig path
-// alias - and a link it cannot follow (a package, a mixin call) stays named in `incomplete`:
-// a missing member is honest, an invented one is not.
+// Walks the extends chain and merges inherited inputs, outputs and members into the contract,
+// then expands host directives: the names their object form exposes become inputs/outputs of
+// the contract, typed from the directive class resolved with the same machinery. Resolution
+// is deliberately static - the same file, a relative import, a tsconfig path alias - and a
+// link it cannot follow (a package, a mixin call) stays named in `incomplete`: a missing
+// member is honest, an invented one is not.
 export function resolveAncestors(
   ts: TypeScriptApi,
   contract: ComponentContract,
   file: string,
   projectRoot: string,
 ): ComponentContract {
-  if (!contract.extends) {
+  if (!contract.extends && contract.hostDirectives.length === 0) {
     return contract;
   }
   const parsed = new Map<string, TS.SourceFile>();
@@ -676,21 +695,84 @@ export function resolveAncestors(
     outputs: [...contract.outputs],
     publicMembers: [...contract.publicMembers],
   };
-  const ancestors: string[] = [];
-  // Host directives are inherited in Angular, so an ancestor's must surface exactly like the
-  // component's own - and their import specifier lives in the file that declares them.
-  const hostDirectiveRefs = contract.hostDirectives.map((name) => ({ name, file }));
   // The component itself is pre-visited, or a (broken) extends cycle would merge it into itself.
   const visited = new Set<string>([`${file.toLowerCase()}#${contract.className}`]);
+  const chain = walkExtends(ts, sourceOf, projectRoot, file, contract.extends, visited);
+  for (const step of chain.steps) {
+    mergeInherited(merged, step.bag);
+  }
+  merged.ancestors = chain.steps.length > 0 ? chain.steps.map((step) => step.name) : null;
+
+  // Host directives are inherited in Angular, so an ancestor's count like the component's
+  // own. The contract keeps only names, so the component's specs are re-read from its file.
+  const ownNode = findClassIn(ts, sourceOf(file), contract.className);
+  const ownSpecs = ownNode
+    ? hostDirectiveSpecsOf(ts, angularDecorator(ts, ownNode)?.meta ?? null)
+    : contract.hostDirectives.map((name) => ({ name, inputs: [], outputs: [] }));
+  const refs: Array<HostDirectiveSpec & { file: string }> = [];
+  for (const candidate of [
+    ...ownSpecs.map((spec) => ({ ...spec, file })),
+    ...chain.steps.flatMap((step) => step.hostSpecs.map((spec) => ({ ...spec, file: step.file }))),
+  ]) {
+    if (!refs.some((ref) => ref.name === candidate.name)) {
+      refs.push(candidate);
+    }
+  }
+
+  const parts: string[] = [];
+  if (chain.unresolved) {
+    parts.push(`base class ${chain.unresolved}`);
+  }
+  const unresolvedHosts: string[] = [];
+  for (const ref of refs) {
+    // A bare reference exposes nothing bindable, so there is nothing to collect or to flag.
+    if (ref.inputs.length === 0 && ref.outputs.length === 0) {
+      continue;
+    }
+    const found = directiveBag(ts, sourceOf, projectRoot, ref.file, ref.name);
+    mergeExposed(merged, exposeFrom(found?.bag ?? null, ref));
+    // Unresolved covers both faces: the directive itself, or a link inside its own chain -
+    // either way an untyped exposure must not read as a typo in the exposure list.
+    if (!found || found.unresolved) {
+      unresolvedHosts.push(namedWithImport(ts, sourceOf(ref.file), ref.name));
+    }
+  }
+  if (unresolvedHosts.length > 0) {
+    parts.push(`host directives ${unresolvedHosts.join(', ')}`);
+  }
+  merged.hostDirectives = refs.map((ref) => ref.name);
+  merged.incomplete = incompleteMessage(parts);
+  return merged;
+}
+
+interface ChainStep {
+  bag: MemberBag;
+  hostSpecs: HostDirectiveSpec[];
+  file: string;
+  name: string;
+}
+
+// The extends walk, shared between the component itself and its host directives' classes.
+// Returns per-ancestor bags nearest-first; unresolved is the link static resolution refused,
+// already named with its import specifier.
+function walkExtends(
+  ts: TypeScriptApi,
+  sourceOf: (path: string) => TS.SourceFile,
+  projectRoot: string,
+  file: string,
+  firstBase: string | null,
+  visited: Set<string>,
+): { steps: ChainStep[]; unresolved: string | null } {
+  const steps: ChainStep[] = [];
   let currentFile = file;
-  let baseText: string | null = contract.extends;
+  let baseText: string | null = firstBase;
   let unresolved: string | null = null;
 
   while (baseText) {
     const currentSource = sourceOf(currentFile);
     const baseName = baseText.replace(/<.*$/, '').trim();
     // A mixin call or a namespaced base is not statically resolvable without a checker.
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(baseName) || ancestors.length >= ANCESTOR_DEPTH_LIMIT) {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(baseName) || steps.length >= ANCESTOR_DEPTH_LIMIT) {
       unresolved = namedWithImport(ts, currentSource, baseText);
       break;
     }
@@ -710,32 +792,97 @@ export function resolveAncestors(
     }
     visited.add(key);
     const meta = angularDecorator(ts, baseNode)?.meta ?? null;
-    mergeInherited(merged, collectMembers(ts, baseNode, meta));
-    for (const name of hostDirectivesOf(ts, meta)) {
-      if (!hostDirectiveRefs.some((ref) => ref.name === name)) {
-        hostDirectiveRefs.push({ name, file: baseFile });
-      }
-    }
-    ancestors.push(baseName);
+    steps.push({
+      bag: collectMembers(ts, baseNode, meta),
+      hostSpecs: hostDirectiveSpecsOf(ts, meta),
+      file: baseFile,
+      name: baseName,
+    });
     currentFile = baseFile;
     baseText = baseClassOf(ts, baseNode);
   }
+  return { steps, unresolved };
+}
 
-  merged.ancestors = ancestors.length > 0 ? ancestors : null;
-  merged.hostDirectives = hostDirectiveRefs.map((ref) => ref.name);
-  const parts: string[] = [];
-  if (unresolved) {
-    parts.push(`base class ${unresolved}`);
+// The full member bag of a host directive class: its own members plus its extends chain.
+// Nested host directives of the directive are not expanded: an exposure that points into
+// them comes out with a null type rather than an invented one.
+function directiveBag(
+  ts: TypeScriptApi,
+  sourceOf: (path: string) => TS.SourceFile,
+  projectRoot: string,
+  fromFile: string,
+  name: string,
+): { bag: MemberBag; unresolved: string | null } | null {
+  const source = sourceOf(fromFile);
+  let node = findClassIn(ts, source, name);
+  let declaredIn = fromFile;
+  if (!node) {
+    const specifier = importSpecifierOf(ts, source, name);
+    const target = specifier ? resolveImportTarget(ts, fromFile, specifier, projectRoot) : null;
+    const found = target ? findClassInModule(ts, sourceOf, projectRoot, target, name) : null;
+    node = found?.node ?? null;
+    declaredIn = found?.file ?? fromFile;
   }
-  if (hostDirectiveRefs.length > 0) {
-    parts.push(
-      `host directives ${hostDirectiveRefs
-        .map((ref) => namedWithImport(ts, sourceOf(ref.file), ref.name))
-        .join(', ')}`,
-    );
+  if (!node) {
+    return null;
   }
-  merged.incomplete = incompleteMessage(parts);
-  return merged;
+  const bag = collectMembers(ts, node, angularDecorator(ts, node)?.meta ?? null);
+  const visited = new Set<string>([`${declaredIn.toLowerCase()}#${name}`]);
+  const chain = walkExtends(ts, sourceOf, projectRoot, declaredIn, baseClassOf(ts, node), visited);
+  for (const step of chain.steps) {
+    mergeInherited(bag, step.bag);
+  }
+  return { bag, unresolved: chain.unresolved };
+}
+
+// 'inner: outer' exposes the directive's public name inner as outer on the host. The public
+// name is the alias when the directive declared one. An exposure the bag cannot back keeps
+// its outer name with a null type: present and bindable, but not typed.
+function exposeFrom(
+  bag: MemberBag | null,
+  ref: HostDirectiveSpec,
+): { inputs: InputInfo[]; outputs: OutputInfo[] } {
+  const split = (entry: string): { inner: string; outer: string } => {
+    const [inner, outer] = entry.split(':').map((part) => part.trim());
+    return { inner: inner ?? entry, outer: outer ?? inner ?? entry };
+  };
+  const inputs = ref.inputs.map((entry) => {
+    const { inner, outer } = split(entry);
+    const found = bag?.inputs.find((item) => (item.alias ?? item.name) === inner) ?? null;
+    if (found) {
+      return { ...found, name: outer, alias: null };
+    }
+    return { name: outer, type: null, required: false, isSignal: false, alias: null };
+  });
+  const outputs = ref.outputs.map((entry) => {
+    const { inner, outer } = split(entry);
+    const found = bag?.outputs.find((item) => (item.alias ?? item.name) === inner) ?? null;
+    return { name: outer, type: found?.type ?? null, alias: null };
+  });
+  return { inputs, outputs };
+}
+
+// Exposed names join the contract unless the component already declares the name itself.
+function mergeExposed(
+  target: MemberBag,
+  exposed: { inputs: InputInfo[]; outputs: OutputInfo[] },
+): void {
+  const taken = new Set(
+    [...target.inputs, ...target.outputs, ...target.publicMembers].map((item) => item.name),
+  );
+  for (const input of exposed.inputs) {
+    if (!taken.has(input.name)) {
+      target.inputs.push(input);
+      taken.add(input.name);
+    }
+  }
+  for (const output of exposed.outputs) {
+    if (!taken.has(output.name)) {
+      target.outputs.push(output);
+      taken.add(output.name);
+    }
+  }
 }
 
 // The nearest declaration wins: a child that redeclares a name shadows every ancestor.

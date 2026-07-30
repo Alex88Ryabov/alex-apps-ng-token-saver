@@ -25,7 +25,7 @@ export interface Usage {
   file: string;
   line: number;
   character: number;
-  kind: 'element' | 'attribute' | 'pipe' | 'code' | 'declaration';
+  kind: 'element' | 'attribute' | 'pipe' | 'code' | 'declaration' | 'binding';
   context: string;
 }
 
@@ -145,6 +145,79 @@ function patternsFor(target: Target): Pattern[] {
   return patterns;
 }
 
+// A broken template must not send the tag scan to the end of the file.
+const TAG_SPAN_LIMIT = 3000;
+
+// From the opening '<' to the matching '>' of the same tag, quotes respected: attribute
+// values legally contain '>'.
+function tagSpanEnd(text: string, from: number): number {
+  let quote: string | null = null;
+  const cap = Math.min(text.length, from + TAG_SPAN_LIMIT);
+  for (let at = from; at < cap; at += 1) {
+    const char = text[at];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return at;
+    }
+  }
+  return cap;
+}
+
+// [x]=, [(x)]=, (x)=, the static x= and the canonical bind-/on-/bindon- spellings; the
+// earliest wins. An attribute name always follows whitespace in valid markup, so the
+// boundary is \s alone: allowing quotes let text inside ANOTHER value pass as a binding.
+function bindingIndexIn(span: string, name: string): number {
+  const esc = escape(name);
+  const structural = new RegExp(`(?:\\[\\(${esc}\\)\\]|\\[${esc}\\]|\\(${esc}\\))\\s*=`);
+  const plain = new RegExp(`(?<=\\s)(?:bind-|bindon-|on-)?${esc}\\s*=(?!=)`);
+  const first = structural.exec(span);
+  const second = plain.exec(span);
+  if (first && second) {
+    return Math.min(first.index, second.index);
+  }
+  return (first ?? second)?.index ?? -1;
+}
+
+interface TagSpan {
+  open: number;
+  close: number;
+}
+
+// Forward and quote-aware - the only direction in which quote parity can be tracked. A '<'
+// inside a quoted value never opens a span, because the scan consumes the whole tag first;
+// a backward lastIndexOf('<') was review 10's silent false negative.
+function tagSpans(text: string): TagSpan[] {
+  const spans: TagSpan[] = [];
+  let at = 0;
+  for (let open = text.indexOf('<', at); open >= 0; open = text.indexOf('<', at)) {
+    const close = tagSpanEnd(text, open);
+    spans.push({ open, close });
+    at = close + 1;
+  }
+  return spans;
+}
+
+function spanContaining(spans: TagSpan[], index: number): TagSpan | null {
+  let low = 0;
+  let high = spans.length - 1;
+  let found: TagSpan | null = null;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (spans[mid]!.open <= index) {
+      found = spans[mid]!;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return found && found.close >= index ? found : null;
+}
+
 function positionOf(text: string, index: number): { line: number; character: number } {
   let line = 1;
   let start = 0;
@@ -220,12 +293,23 @@ export interface UsageReport {
 export function findUsages(
   root: string,
   target: Target,
-  options: { declaredIn?: string; limit: number; fileLimit: number },
+  options: { declaredIn?: string; input?: string; limit: number; fileLimit: number },
 ): UsageReport {
   const patterns = patternsFor(target);
   const scan = collectFiles(root, options.fileLimit);
   const usages: Usage[] = [];
   let total = 0;
+
+  // The input filter narrows tag usages down to the lines that actually bind the name -
+  // the exact sites an input rename edits. It only makes sense on tag-shaped targets.
+  const wanted = options.input?.trim();
+  const filter =
+    wanted && patterns.some((item) => item.kind === 'element' || item.kind === 'attribute')
+      ? wanted
+      : undefined;
+  let tagsScanned = 0;
+  const seenBindings = new Set<string>();
+  const seenTags = new Set<string>();
 
   let codeHits = 0;
   for (const file of scan.files) {
@@ -237,10 +321,15 @@ export function findUsages(
       continue;
     }
     const text = stripComments(original, file.endsWith('.html'));
+    // Built lazily per file, and only when the filter needs to map hits onto their tags.
+    let spans: TagSpan[] | null = null;
     for (const pattern of patterns) {
       // In its own file only the class name is skipped: the selector inside that same file's
       // template is a recursive usage and must not be lost.
       if (declaring && pattern.kind === 'code') {
+        continue;
+      }
+      if (filter && pattern.kind !== 'element' && pattern.kind !== 'attribute') {
         continue;
       }
       pattern.regex.lastIndex = 0;
@@ -250,6 +339,45 @@ export function findUsages(
         const before = text.slice(Math.max(0, hit.index - 40), hit.index);
         const declaration = /\b(selector|name)\s*:\s*['"`][^'"`]*$/.test(before);
         if (declaring && declaration) {
+          continue;
+        }
+        if (filter) {
+          if (declaration) {
+            continue;
+          }
+          spans ??= tagSpans(text);
+          const span = spanContaining(spans, hit.index);
+          if (!span) {
+            continue;
+          }
+          // One tag can match both the element and an attribute pattern: it counts once in
+          // the denominator and its binding gives one entry.
+          const tagKey = `${file}#${span.open}`;
+          if (!seenTags.has(tagKey)) {
+            seenTags.add(tagKey);
+            tagsScanned += 1;
+          }
+          const inSpan = bindingIndexIn(text.slice(span.open, span.close + 1), filter);
+          if (inSpan < 0) {
+            continue;
+          }
+          const index = span.open + inSpan;
+          const seenKey = `${file}#${index}`;
+          if (seenBindings.has(seenKey)) {
+            continue;
+          }
+          seenBindings.add(seenKey);
+          total += 1;
+          if (usages.length < options.limit) {
+            const at = positionOf(text, index);
+            usages.push({
+              file: relative(root, file).replace(/\\/g, '/'),
+              line: at.line,
+              character: at.character,
+              kind: 'binding',
+              context: contextAt(original, index),
+            });
+          }
           continue;
         }
         total += 1;
@@ -271,6 +399,16 @@ export function findUsages(
   }
 
   const notes: string[] = [];
+  if (filter) {
+    notes.push(`input '${filter}': bound in ${total} of ${tagsScanned} tag usages`);
+  }
+  if (options.input !== undefined && !filter) {
+    notes.push(
+      wanted
+        ? 'the input filter needs an element or attribute selector target; usages are unfiltered'
+        : 'the input filter needs a non-empty name; usages are unfiltered',
+    );
+  }
   if (total > usages.length) {
     notes.push(`showing the first ${usages.length} of ${total}`);
   }

@@ -60,11 +60,13 @@ function readDeclaredRange(root: string): string | null {
   return pkg.dependencies?.['@angular/core'] ?? null;
 }
 
-function readAngularVersion(root: string): string {
+function readAngularVersion(root: string, searchedFrom: string): string {
   const pkgPath = join(root, 'node_modules', '@angular', 'core', 'package.json');
   if (!existsSync(pkgPath)) {
+    // Name the start of the search too: the nearest node_modules can belong to an unrelated
+    // outer project, and a message naming only that folder sends the reader the wrong way.
     throw new WorkspaceError(
-      `no @angular/core in ${root}/node_modules`,
+      `no @angular/core in ${root}/node_modules (the nearest node_modules found above ${searchedFrom})`,
       'this is not an Angular workspace, or dependencies are not installed',
     );
   }
@@ -110,7 +112,7 @@ function pickServerDir(major: number, serversDir: string, declared: string | nul
 
 export function locateProject(anyPathInside: string): ProjectInfo {
   const root = findRoot(anyPathInside);
-  const angularCoreVersion = readAngularVersion(root);
+  const angularCoreVersion = readAngularVersion(root, resolve(anyPathInside));
   return { root, angularMajor: Number(angularCoreVersion.split('.')[0]), angularCoreVersion };
 }
 

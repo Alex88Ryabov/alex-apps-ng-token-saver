@@ -266,6 +266,10 @@ server.registerTool(
       selectorOrFile: z
         .string()
         .describe('Path to the declaring .ts, or the selector itself: app-user-card, [appDrag], money'),
+      input: z
+        .string()
+        .optional()
+        .describe('Only tag usages binding this input/output; entries then point at the binding'),
       path: z
         .string()
         .optional()
@@ -273,7 +277,7 @@ server.registerTool(
       limit: z.number().int().min(1).max(500).optional().describe('How many usages to return, 100 by default'),
     },
   },
-  async ({ selectorOrFile, path, limit }) => {
+  async ({ selectorOrFile, input, path, limit }) => {
     try {
       const asPath = isAbsolute(selectorOrFile) || /[\\/]/.test(selectorOrFile);
       const file = asPath ? componentFileFor(resolveFile(selectorOrFile)) : null;
@@ -287,6 +291,7 @@ server.registerTool(
       }
       const report = findUsages(project.root, target, {
         ...(file ? { declaredIn: file } : {}),
+        ...(input !== undefined ? { input } : {}),
         limit: limit ?? 100,
         fileLimit: 20_000,
       });

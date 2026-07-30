@@ -1,19 +1,18 @@
 // Section 5, scenario 1: 'rename input X to Y across all usages' - the grep path against
 // the bridge. Neither path performs the rename: measured is the information cost of
-// LOCATING candidate sites.
+// LOCATING the binding sites.
 //
-// KNOWN ASYMMETRY - do not read the % as like-for-like. ng_find_usages locates component
-// USAGES (the element tag) and has no notion of the input at all, while the binding grep
-// already narrows to binding-shaped lines. After the bridge the agent still checks, per
-// usage, whether this input is bound there; after the grep it still attributes each
-// binding-shaped line to the right component (the tag is usually lines above). Neither
-// residual is measured here, so the printed saving is an UPPER BOUND for the bridge path.
+// Both sides answer at the same depth: ng_find_usages takes the input name and returns
+// only the tag usages that bind it, each entry pointing at the binding itself. What still
+// differs is attribution, and it favours the bridge in correctness, not in the count
+// below: the grep's binding lines are repo-wide and unattributed, the bridge's are scoped
+// to this component's tags.
 //
 // The grep path an agent actually takes: read the component file - the selector and the
 // input live there - then grep the workspace for the selector and for the binding
 // spellings of the input. Its cost: the whole file plus every matched line in
 // file:line:text form, exactly what a grep tool returns. The bridge path:
-// ng_component_info (selector and inputs arrive parsed) plus ng_find_usages.
+// ng_component_info (selector and inputs arrive parsed) plus ng_find_usages with `input`.
 //
 //   node tools/bench-rename.mjs <componentFile> <inputName>
 
@@ -108,23 +107,28 @@ const call = async (name, args) => {
   return { ms: Date.now() - started, text: response.content?.[0]?.text ?? '' };
 };
 const info = await call('ng_component_info', { file: componentFile });
-const usages = await call('ng_find_usages', { selectorOrFile: componentFile, limit: 500 });
+const usages = await call('ng_find_usages', { selectorOrFile: componentFile, input, limit: 500 });
 const bridgeText = info.text + usages.text;
 let usageCount = null;
+let note = '';
 try {
-  usageCount = JSON.parse(usages.text).usages?.length ?? null;
+  const parsed = JSON.parse(usages.text);
+  usageCount = parsed.usages?.length ?? null;
+  note = parsed.incomplete ?? '';
 } catch {
   console.log(`  unparseable find-usages answer: ${usages.text.slice(0, 200)}`);
 }
 console.log(`\nbridge path:`);
 console.log(`  ng_component_info: ${info.text.length} chars (${info.ms} ms), ` +
-  `ng_find_usages: ${usages.text.length} chars (${usages.ms} ms), usages: ${usageCount ?? '?'}`);
+  `ng_find_usages: ${usages.text.length} chars (${usages.ms} ms), binding entries: ${usageCount ?? '?'}`);
+if (note) {
+  console.log(`  tool note: ${note}`);
+}
 console.log(`  total: ${bridgeText.length} chars, ${counters.o200k(bridgeText)} tokens o200k ` +
   `(${counters.cl100k(bridgeText)} cl100k)`);
 
 console.log(
-  `\nsaving (upper bound for the bridge - see the header): ` +
-    `${Math.round((1 - counters.o200k(bridgeText) / counters.o200k(baselineText)) * 100)}% tokens o200k, ` +
+  `\nsaving: ${Math.round((1 - counters.o200k(bridgeText) / counters.o200k(baselineText)) * 100)}% tokens o200k, ` +
     `${Math.round((1 - bridgeText.length / baselineText.length) * 100)}% chars`,
 );
 await client.close();
