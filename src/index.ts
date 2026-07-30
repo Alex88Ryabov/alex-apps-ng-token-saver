@@ -14,6 +14,7 @@ import {
   describeComponents,
   loadTypeScript,
   pickComponent,
+  resolveAncestors,
 } from './component-info.js';
 import {
   belongsTo,
@@ -180,13 +181,14 @@ server.registerTool(
         return json({ found: false, file: path, reason: 'the file has no class with @Component or @Directive' });
       }
       const others = found.filter((item) => item !== chosen).map((item) => item.className);
+      const complete = resolveAncestors(ts, chosen, path, project.root);
       return json(
         compact({
           found: true,
           // Echo the path only when it differs from the one passed in: the echo costs ~100 chars.
           file: path === requested ? null : path,
           angularVersion: project.angularCoreVersion,
-          ...chosen,
+          ...complete,
           others: others.length > 0 ? others : null,
         }),
       );

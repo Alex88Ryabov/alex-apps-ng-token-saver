@@ -5,8 +5,8 @@
 // rather than a whole class, so parsing lives here: no Program, no type checking, only what is
 // actually written in the file.
 
-import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type * as TS from 'typescript';
 import { WorkspaceError } from './lsp/workspace.js';
@@ -46,8 +46,10 @@ export interface ComponentContract {
   imports: string[];
   /** Their inputs and outputs are not collected here: a non-empty list means the contract is partial. */
   hostDirectives: string[];
-  /** Base-class members are not collected: with a non-empty extends, inputs/outputs may be partial. */
+  /** The direct base class as written; resolveAncestors merges its members when it can. */
   extends: string | null;
+  /** Resolved extends chain whose members are merged below, nearest ancestor first. */
+  ancestors: string[] | null;
   inputs: InputInfo[];
   outputs: OutputInfo[];
   publicMembers: MemberInfo[];
@@ -174,6 +176,40 @@ function contractOf(
   const styleUrl = stringProp(ts, meta, 'styleUrl');
   const baseClass = baseClassOf(ts, node);
   const hostDirectives = hostDirectivesOf(ts, meta);
+  const members = collectMembers(ts, node, meta);
+
+  return {
+    className: node.name?.text ?? '(anonymous class)',
+    kind,
+    selector: stringProp(ts, meta, 'selector'),
+    // Implicit standalone turns on from 19.0.0, which is how the shipped compiler gates it too.
+    standalone: written ?? angularMajor >= 19,
+    changeDetection: lastSegment(ts, meta, 'changeDetection'),
+    templateUrl: stringProp(ts, meta, 'templateUrl'),
+    inlineTemplate: propOf(ts, meta, 'template') !== null,
+    styleUrls: [...stringArrayProp(ts, meta, 'styleUrls'), ...(styleUrl ? [styleUrl] : [])],
+    imports: textArrayProp(ts, meta, 'imports'),
+    hostDirectives,
+    extends: baseClass,
+    ancestors: null,
+    ...members,
+    incomplete: incompletenessOf(ts, node.getSourceFile(), baseClass, hostDirectives),
+  };
+}
+
+interface MemberBag {
+  inputs: InputInfo[];
+  outputs: OutputInfo[];
+  publicMembers: MemberInfo[];
+}
+
+// Shared by the component itself and by every ancestor: a base class carries the same
+// member shapes, with or without an Angular decorator of its own.
+function collectMembers(
+  ts: TypeScriptApi,
+  node: TS.ClassDeclaration,
+  meta: TS.ObjectLiteralExpression | null,
+): MemberBag {
   const inputs: InputInfo[] = [];
   const outputs: OutputInfo[] = [];
   const publicMembers: MemberInfo[] = [];
@@ -210,25 +246,7 @@ function contractOf(
   declaredInMeta(ts, meta, 'outputs').forEach((item) => {
     outputs.push({ name: item.name, type: emitted(takeMember(publicMembers, item.name)), alias: item.alias });
   });
-
-  return {
-    className: node.name?.text ?? '(anonymous class)',
-    kind,
-    selector: stringProp(ts, meta, 'selector'),
-    // Implicit standalone turns on from 19.0.0, which is how the shipped compiler gates it too.
-    standalone: written ?? angularMajor >= 19,
-    changeDetection: lastSegment(ts, meta, 'changeDetection'),
-    templateUrl: stringProp(ts, meta, 'templateUrl'),
-    inlineTemplate: propOf(ts, meta, 'template') !== null,
-    styleUrls: [...stringArrayProp(ts, meta, 'styleUrls'), ...(styleUrl ? [styleUrl] : [])],
-    imports: textArrayProp(ts, meta, 'imports'),
-    hostDirectives,
-    extends: baseClass,
-    inputs,
-    outputs,
-    publicMembers,
-    incomplete: incompletenessOf(ts, node.getSourceFile(), baseClass, hostDirectives),
-  };
+  return { inputs, outputs, publicMembers };
 }
 
 // The partial-contract flag must be in the answer itself and in words: the agent is not obliged
@@ -240,17 +258,24 @@ function incompletenessOf(
   baseClass: string | null,
   hostDirectives: string[],
 ): string | null {
-  const named = (name: string): string => {
-    const from = importSpecifierOf(ts, source, name.replace(/<.*$/, ''));
-    return from ? `${name} (imported from '${from}')` : name;
-  };
   const sources: string[] = [];
   if (baseClass) {
-    sources.push(`base class ${named(baseClass)}`);
+    sources.push(`base class ${namedWithImport(ts, source, baseClass)}`);
   }
   if (hostDirectives.length > 0) {
-    sources.push(`host directives ${hostDirectives.map(named).join(', ')}`);
+    sources.push(
+      `host directives ${hostDirectives.map((item) => namedWithImport(ts, source, item)).join(', ')}`,
+    );
   }
+  return incompleteMessage(sources);
+}
+
+function namedWithImport(ts: TypeScriptApi, source: TS.SourceFile, name: string): string {
+  const from = importSpecifierOf(ts, source, name.replace(/<.*$/, ''));
+  return from ? `${name} (imported from '${from}')` : name;
+}
+
+function incompleteMessage(sources: string[]): string | null {
   if (sources.length === 0) {
     return null;
   }
@@ -615,4 +640,307 @@ function declaredInMeta(
     const [declared, alias] = entry.split(':').map((part) => part.trim());
     return { name: declared ?? entry, alias: alias ?? null };
   });
+}
+
+// A chain deeper than this is treated as unresolvable; nothing real comes close.
+const ANCESTOR_DEPTH_LIMIT = 10;
+
+// Walks the extends chain and merges inherited inputs, outputs and members into the contract.
+// Resolution is deliberately static - the same file, a relative import, a tsconfig path
+// alias - and a link it cannot follow (a package, a mixin call) stays named in `incomplete`:
+// a missing member is honest, an invented one is not.
+export function resolveAncestors(
+  ts: TypeScriptApi,
+  contract: ComponentContract,
+  file: string,
+  projectRoot: string,
+): ComponentContract {
+  if (!contract.extends) {
+    return contract;
+  }
+  const parsed = new Map<string, TS.SourceFile>();
+  const sourceOf = (path: string): TS.SourceFile => {
+    const key = path.toLowerCase();
+    const known = parsed.get(key);
+    if (known) {
+      return known;
+    }
+    const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true);
+    parsed.set(key, source);
+    return source;
+  };
+
+  const merged: ComponentContract = {
+    ...contract,
+    inputs: [...contract.inputs],
+    outputs: [...contract.outputs],
+    publicMembers: [...contract.publicMembers],
+  };
+  const ancestors: string[] = [];
+  // Host directives are inherited in Angular, so an ancestor's must surface exactly like the
+  // component's own - and their import specifier lives in the file that declares them.
+  const hostDirectiveRefs = contract.hostDirectives.map((name) => ({ name, file }));
+  // The component itself is pre-visited, or a (broken) extends cycle would merge it into itself.
+  const visited = new Set<string>([`${file.toLowerCase()}#${contract.className}`]);
+  let currentFile = file;
+  let baseText: string | null = contract.extends;
+  let unresolved: string | null = null;
+
+  while (baseText) {
+    const currentSource = sourceOf(currentFile);
+    const baseName = baseText.replace(/<.*$/, '').trim();
+    // A mixin call or a namespaced base is not statically resolvable without a checker.
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(baseName) || ancestors.length >= ANCESTOR_DEPTH_LIMIT) {
+      unresolved = namedWithImport(ts, currentSource, baseText);
+      break;
+    }
+    let baseFile = currentFile;
+    let baseNode = findClassIn(ts, currentSource, baseName);
+    if (!baseNode) {
+      const specifier = importSpecifierOf(ts, currentSource, baseName);
+      const target = specifier ? resolveImportTarget(ts, currentFile, specifier, projectRoot) : null;
+      const found = target ? findClassInModule(ts, sourceOf, projectRoot, target, baseName) : null;
+      baseNode = found?.node ?? null;
+      baseFile = found?.file ?? currentFile;
+    }
+    const key = `${baseFile.toLowerCase()}#${baseName}`;
+    if (!baseNode || visited.has(key)) {
+      unresolved = namedWithImport(ts, currentSource, baseText);
+      break;
+    }
+    visited.add(key);
+    const meta = angularDecorator(ts, baseNode)?.meta ?? null;
+    mergeInherited(merged, collectMembers(ts, baseNode, meta));
+    for (const name of hostDirectivesOf(ts, meta)) {
+      if (!hostDirectiveRefs.some((ref) => ref.name === name)) {
+        hostDirectiveRefs.push({ name, file: baseFile });
+      }
+    }
+    ancestors.push(baseName);
+    currentFile = baseFile;
+    baseText = baseClassOf(ts, baseNode);
+  }
+
+  merged.ancestors = ancestors.length > 0 ? ancestors : null;
+  merged.hostDirectives = hostDirectiveRefs.map((ref) => ref.name);
+  const parts: string[] = [];
+  if (unresolved) {
+    parts.push(`base class ${unresolved}`);
+  }
+  if (hostDirectiveRefs.length > 0) {
+    parts.push(
+      `host directives ${hostDirectiveRefs
+        .map((ref) => namedWithImport(ts, sourceOf(ref.file), ref.name))
+        .join(', ')}`,
+    );
+  }
+  merged.incomplete = incompleteMessage(parts);
+  return merged;
+}
+
+// The nearest declaration wins: a child that redeclares a name shadows every ancestor.
+// One exception, straight from Angular semantics: decorator metadata is inherited, so a
+// child field redeclared WITHOUT @Input over an ancestor @Input still binds as an input.
+// The entry stays an input and takes the child's type.
+function mergeInherited(target: MemberBag, inherited: MemberBag): void {
+  const taken = new Set(
+    [...target.inputs, ...target.outputs, ...target.publicMembers].map((item) => item.name),
+  );
+  const push = <T extends { name: string }>(list: T[], item: T): void => {
+    if (!taken.has(item.name)) {
+      list.push(item);
+      taken.add(item.name);
+    }
+  };
+  const plainChildMember = (name: string): boolean => {
+    return target.publicMembers.some((item) => item.name === name);
+  };
+  for (const input of inherited.inputs) {
+    if (!taken.has(input.name)) {
+      push(target.inputs, input);
+    } else if (plainChildMember(input.name)) {
+      const childType = takeMember(target.publicMembers, input.name);
+      target.inputs.push({ ...input, type: childType ?? input.type });
+    }
+  }
+  for (const output of inherited.outputs) {
+    if (!taken.has(output.name)) {
+      push(target.outputs, output);
+    } else if (plainChildMember(output.name)) {
+      const childType = takeMember(target.publicMembers, output.name);
+      target.outputs.push({ ...output, type: childType ? emitted(childType) : output.type });
+    }
+  }
+  inherited.publicMembers.forEach((item) => push(target.publicMembers, item));
+}
+
+function findClassIn(ts: TypeScriptApi, source: TS.SourceFile, name: string): TS.ClassDeclaration | null {
+  for (const statement of source.statements) {
+    if (ts.isClassDeclaration(statement) && statement.name?.text === name) {
+      return statement;
+    }
+  }
+  return null;
+}
+
+interface FoundClass {
+  node: TS.ClassDeclaration;
+  file: string;
+}
+
+// Aliases almost always land on a barrel: an index.ts of re-exports and not a single class.
+// Follow `export * from` and `export { X } from` (with renames) a few hops deep.
+function findClassInModule(
+  ts: TypeScriptApi,
+  sourceOf: (path: string) => TS.SourceFile,
+  projectRoot: string,
+  file: string,
+  name: string,
+  visited: Set<string> = new Set(),
+): FoundClass | null {
+  // The key is (file, name), not the file alone: a renamed re-export may legitimately come
+  // back to an already visited file looking for a different class.
+  const key = `${file.toLowerCase()}#${name}`;
+  if (visited.has(key) || visited.size >= 20) {
+    return null;
+  }
+  visited.add(key);
+  const source = sourceOf(file);
+  const direct = findClassIn(ts, source, name);
+  if (direct) {
+    return { node: direct, file };
+  }
+  for (const statement of source.statements) {
+    if (!ts.isExportDeclaration(statement)) {
+      continue;
+    }
+    const spec = statement.moduleSpecifier;
+    const from =
+      spec && ts.isStringLiteralLike(spec) ? resolveImportTarget(ts, file, spec.text, projectRoot) : null;
+    if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      const element = statement.exportClause.elements.find((item) => item.name.text === name);
+      if (!element) {
+        continue;
+      }
+      // export { Inner as Name }: past this barrel the class goes by its inner name.
+      const innerName = element.propertyName?.text ?? name;
+      if (!from) {
+        const local = findClassIn(ts, source, innerName);
+        if (local) {
+          return { node: local, file };
+        }
+        continue;
+      }
+      const hit = findClassInModule(ts, sourceOf, projectRoot, from, innerName, visited);
+      if (hit) {
+        return hit;
+      }
+    } else if (!statement.exportClause && from) {
+      const hit = findClassInModule(ts, sourceOf, projectRoot, from, name, visited);
+      if (hit) {
+        return hit;
+      }
+    }
+  }
+  return null;
+}
+
+interface AliasTable {
+  baseUrl: string;
+  patterns: Array<[string, string[]]>;
+}
+
+// Cached for the process lifetime, like loadTypeScript: a paths entry edited in tsconfig
+// is not picked up until restart. Conscious trade-off, recorded in CLAUDE.md.
+const aliases = new Map<string, AliasTable>();
+
+// Nx keeps paths in tsconfig.base.json, the CLI in tsconfig.json at the root; both are
+// JSONC, so only the compiler's own reader can parse them (fact 16). paths can also sit
+// an extends-hop deeper, so each candidate is followed up the chain like strictTemplates.
+function aliasesOf(ts: TypeScriptApi, root: string): AliasTable {
+  const key = root.toLowerCase();
+  const known = aliases.get(key);
+  if (known) {
+    return known;
+  }
+  const table =
+    pathsFromConfig(ts, join(root, 'tsconfig.base.json'), 0) ??
+    pathsFromConfig(ts, join(root, 'tsconfig.json'), 0) ?? { baseUrl: root, patterns: [] };
+  aliases.set(key, table);
+  return table;
+}
+
+// Without baseUrl, paths resolve relative to the config file that declares them.
+function pathsFromConfig(ts: TypeScriptApi, configPath: string, depth: number): AliasTable | null {
+  if (depth > 5 || !existsSync(configPath)) {
+    return null;
+  }
+  const config = ts.readConfigFile(configPath, (path) => readFileSync(path, 'utf8')).config as
+    | {
+        compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
+        extends?: unknown;
+      }
+    | undefined;
+  const options = config?.compilerOptions;
+  if (options?.paths) {
+    return {
+      baseUrl: resolve(dirname(configPath), options.baseUrl ?? '.'),
+      patterns: Object.entries(options.paths),
+    };
+  }
+  // A package extends (no leading dot) would need the project's resolver: refuse.
+  const parent =
+    typeof config?.extends === 'string' && config.extends.startsWith('.') ? config.extends : null;
+  if (!parent) {
+    return null;
+  }
+  const next = resolve(dirname(configPath), parent);
+  return pathsFromConfig(ts, next.endsWith('.json') ? next : `${next}.json`, depth + 1);
+}
+
+// The specifier may name a file with or without extension, a folder with an index.ts, or -
+// NodeNext style - a .js path that means the .ts next to it.
+function existingTsFile(base: string): string | null {
+  const candidates = base.endsWith('.ts')
+    ? [base]
+    : base.endsWith('.js')
+      ? [base.replace(/\.js$/, '.ts')]
+      : [`${base}.ts`, join(base, 'index.ts')];
+  return candidates.find((item) => existsSync(item)) ?? null;
+}
+
+function resolveImportTarget(
+  ts: TypeScriptApi,
+  fromFile: string,
+  specifier: string,
+  projectRoot: string,
+): string | null {
+  if (specifier.startsWith('.')) {
+    return existingTsFile(resolve(dirname(fromFile), specifier));
+  }
+  const { baseUrl, patterns } = aliasesOf(ts, projectRoot);
+  for (const [pattern, targets] of patterns) {
+    const star = pattern.indexOf('*');
+    let tail: string | null = null;
+    if (star < 0) {
+      tail = specifier === pattern ? '' : null;
+    } else {
+      const prefix = pattern.slice(0, star);
+      const suffix = pattern.slice(star + 1);
+      if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
+        tail = specifier.slice(prefix.length, specifier.length - suffix.length);
+      }
+    }
+    if (tail === null) {
+      continue;
+    }
+    for (const target of targets) {
+      const hit = existingTsFile(resolve(baseUrl, target.replace('*', tail)));
+      if (hit) {
+        return hit;
+      }
+    }
+  }
+  // Anything else is a package: without the project's resolver we refuse rather than guess.
+  return null;
 }

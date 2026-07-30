@@ -12,6 +12,7 @@ import {
   describeComponents,
   loadTypeScript,
   pickComponent,
+  resolveAncestors,
 } from '../dist/component-info.js';
 import { locateProject } from '../dist/lsp/workspace.js';
 
@@ -462,4 +463,260 @@ test('a broken typescript.js is explained but cannot be fixed in-process: Node c
   await writeFile(entry, 'module.exports = { version: "0.0.0-check" };');
   await assert.rejects(() => loadTypeScript(root), /did not expose the TypeScript API/);
   await rm(root, { recursive: true, force: true });
+});
+
+// ---- Ancestor resolution: extends chains merged into the contract ----
+
+const v17 = resolve('fixtures/v17');
+
+function contractFrom(file, major = 17) {
+  const [contract] = describeComponents(ts, readFileSync(file, 'utf8'), file, major);
+  assert.ok(contract, `no component in ${file}`);
+  return contract;
+}
+
+test('ancestors: a relative chain of two is merged and the child shadows', () => {
+  const file = resolve('fixtures/v17/src/app/derived-card.component.ts');
+  const complete = resolveAncestors(ts, contractFrom(file), file, v17);
+  assert.deepEqual(complete.ancestors, ['BasePanel', 'BaseWidget']);
+  assert.deepEqual(
+    complete.inputs.map((item) => item.name),
+    ['accent', 'heading', 'disabled'],
+  );
+  assert.deepEqual(complete.outputs.map((item) => item.name), ['blurred']);
+  const focus = complete.publicMembers.filter((item) => item.name === 'focus');
+  assert.equal(focus.length, 1, 'the override must shadow the inherited method');
+  assert.ok(complete.publicMembers.some((item) => item.name === 'collapse'));
+  assert.ok(!complete.publicMembers.some((item) => item.name === 'token'), 'private stays hidden');
+  assert.equal(complete.incomplete, null);
+});
+
+test('ancestors: a base behind a tsconfig alias barrel is found', () => {
+  const file = resolve('fixtures/v17/src/app/alias-card.component.ts');
+  const complete = resolveAncestors(ts, contractFrom(file), file, v17);
+  assert.deepEqual(complete.ancestors, ['NamedEntity']);
+  assert.deepEqual(
+    complete.publicMembers.map((item) => item.name).sort(),
+    ['describe', 'id', 'label'],
+  );
+  assert.equal(complete.incomplete, null);
+});
+
+test('ancestors: a base from a package is refused and stays named in incomplete', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { CdkTree } from '@angular/cdk/tree';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends CdkTree {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.equal(complete.ancestors, null);
+    assert.match(complete.incomplete, /base class CdkTree \(imported from '@angular\/cdk\/tree'\)/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ancestors: a generic base in the same file needs no import', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       export class Store<T> {
+         items: T[] = [];
+         clear(): void {}
+       }
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Store<string> {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Store']);
+    assert.ok(complete.publicMembers.some((item) => item.name === 'clear'));
+    assert.equal(complete.incomplete, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Angular inherits decorator metadata: a field redeclared without @Input over an ancestor
+// @Input still binds as an input. The contract must not demote it to a plain member.
+test('ancestors: a plain redeclaration over an inherited @Input stays an input', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component, Input } from '@angular/core';
+       export class Base {
+         @Input() size = 0;
+       }
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base {
+         size: 1 | 2 | 3 = 1;
+       }`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(
+      complete.inputs.map((item) => [item.name, item.type]),
+      [['size', '1 | 2 | 3']],
+    );
+    assert.ok(!complete.publicMembers.some((item) => item.name === 'size'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ancestors: a mixin call is not resolvable by design', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { withBits, Base } from './mixins';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends withBits(Base) {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.equal(complete.ancestors, null);
+    assert.match(complete.incomplete, /base class withBits\(Base\)/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Review 8 BLOCKER: host directives are inherited in Angular, so an ancestor's own
+// hostDirectives must surface in the contract and in incomplete - silently dropping them
+// makes a partial contract look complete.
+test('ancestors: host directives of an ancestor are named, not silently dropped', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'base.ts'),
+      `import { Directive } from '@angular/core';
+       import { CdkDrag } from '@angular/cdk/drag-drop';
+       @Directive({ hostDirectives: [CdkDrag] })
+       export class Base {
+         nudge(): void {}
+       }`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { Base } from './base';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.hostDirectives, ['CdkDrag']);
+    assert.match(
+      complete.incomplete,
+      /host directives CdkDrag \(imported from '@angular\/cdk\/drag-drop'\)/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Review 8 MAJOR: the barrel walk deduped by file alone, so a class reachable a second
+// time through the same file under another name (export { Foo as Target }) was hidden.
+test('ancestors: a renamed re-export through an already visited file is still found', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(join(dir, 'shared.ts'), 'export class Foo { ping(): void {} }');
+    await writeFile(join(dir, 'mid1.ts'), `export * from './shared';`);
+    await writeFile(join(dir, 'mid2.ts'), `export { Foo as Target } from './shared';`);
+    await writeFile(join(dir, 'barrel.ts'), `export * from './mid1';\nexport { Target } from './mid2';`);
+    await writeFile(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { paths: { '@lib': ['barrel.ts'] } } }),
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { Target } from '@lib';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Target {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Target']);
+    assert.ok(complete.publicMembers.some((item) => item.name === 'ping'));
+    assert.equal(complete.incomplete, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// paths can live one extends-hop away from tsconfig.json, exactly like strictTemplates.
+test('ancestors: an alias declared behind a tsconfig extends chain resolves', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(join(dir, 'base.ts'), 'export class Base { tick(): void {} }');
+    await writeFile(
+      join(dir, 'tsconfig.paths.json'),
+      JSON.stringify({ compilerOptions: { paths: { '@base': ['./base.ts'] } } }),
+    );
+    await writeFile(join(dir, 'tsconfig.json'), JSON.stringify({ extends: './tsconfig.paths.json' }));
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { Base } from '@base';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.ok(complete.publicMembers.some((item) => item.name === 'tick'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// NodeNext-style relative imports name the compiled .js while meaning the .ts next to it.
+test('ancestors: a .js specifier resolves to the .ts next to it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(join(dir, 'base.ts'), 'export class Base { run(): void {} }');
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { Base } from './base.js';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Base']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ancestors: an extends cycle terminates instead of hanging', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       @Component({ selector: 'a-b', template: '' })
+       export class A extends B {}
+       export class B extends A {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['B']);
+    assert.match(complete.incomplete, /base class A/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -50,17 +50,25 @@ across two production codebases through a real MCP client (`npm run bench:contra
 | | Nx monorepo | CLI workspace |
 |---|---|---|
 | Angular / TypeScript | 19.2.18 / 5.8.3 | 17.3.8 / 5.3.3 |
-| Components in the tally | 1298 | 227 |
+| Components in the tally | 1298 | 407 |
 | Parse errors | 0 | 0 |
-| Sources | 5 403 479 chars | 1 033 725 chars |
-| Contracts | 1 689 800 chars | 259 184 chars |
-| **Saved** | **69%** | **75%** |
-| Contract shorter than source | 1214 of 1298 (94%) | 222 of 227 (98%) |
-| Ratio, median | 0.44 (p10 0.20, p90 0.89) | 0.29 (p10 0.17, p90 0.81) |
-| First call (loads the project's TypeScript) | 315 ms | 601 ms |
+| Sources | 5 404 314 chars | 1 735 223 chars |
+| Contracts (base-class members included) | 1 870 205 chars | 463 563 chars |
+| **Saved** | **65%** | **73%** |
+| Contract shorter than source | 1173 of 1298 (90%) | 386 of 407 (95%) |
+| Ratio, median | 0.44 (p10 0.21, p90 0.99) | 0.33 (p10 0.19, p90 0.83) |
+| Flagged as partial | 1 of 1298 | 3 of 407 |
+| First call (loads the project's TypeScript) | 300 ms | 564 ms |
 
-The largest component in the monorepo shrinks from **177 333 to 10 592 characters** while
-listing 118 contract members.
+The largest component in the monorepo shrinks from **177 863 to 10 693 characters** while
+listing 119 contract members. Contracts now include members inherited from base classes —
+the extends chain is resolved through relative imports and tsconfig path aliases, barrels
+included — which is why the saving is a few points lower than a contract that stopped at
+the class's own body: those members were previously missing, not saved. Before the
+resolver, 91 of 1298 monorepo contracts were flagged as partial; now 1 is (a base the
+static resolver refuses to guess about). In the CLI workspace 29 more files sit in a
+sibling app with no `node_modules` installed and are refused with an error saying exactly
+that.
 
 Three caveats that must travel with these numbers:
 
@@ -130,9 +138,11 @@ Outside the measured v17–v22 range `ng_version_rules` returns nothing and says
 
 Every answer that is incomplete says so, in words, inside the answer:
 
-- a component contract whose base class or host directives live elsewhere carries
-  `incomplete: "inputs, outputs and members of base class BaseFieldComponent (imported from
-  './base-field.component') are not collected here — ask ng_component_info about their files"`;
+- a component contract merges the members of its base classes (resolved statically through
+  relative imports and tsconfig aliases); when a link in the chain leads into a package or a
+  mixin call, the walk stops and the answer says so:
+  `incomplete: "inputs, outputs and members of base class CdkTree (imported from
+  '@angular/cdk/tree') are not collected here — ask ng_component_info about their files"`;
 - `ng_version_rules` reports `notMeasured` topics and a `caveat` when your minor differs from the
   measured one;
 - `ng_find_usages` labels a declaration as `declaration` rather than a usage, and admits that
@@ -162,10 +172,12 @@ app and "the template is clean" in the next. Verified against both.
 - **Not a type checker of its own.** Everything the LSP-backed tools report comes from the same
   compiler that builds the project. The value is in delivering it undistorted.
 
-Known gaps, all recorded rather than hidden: base-class members are not collected (91 of 1298
-components in the measured monorepo are flagged for it); topics `forms` and `testing` have no
-measurements; Nx repositories with inferred targets yield projects without `tsConfig`; an
-attribute selector inside a CSS rule in `styles: [...]` counts as a directive usage.
+Known gaps, all recorded rather than hidden: host-directive members are not collected (the
+contract names the directives instead); a base class from a package or behind a mixin call
+stops the ancestor walk (1 of 1298 components in the measured monorepo); topics `forms` and
+`testing` have no measurements; Nx repositories with inferred targets yield projects without
+`tsConfig`; an attribute selector inside a CSS rule in `styles: [...]` counts as a directive
+usage.
 
 ## Requirements and setup
 
@@ -213,7 +225,7 @@ Configuration, both variables optional:
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 118 unit tests (node:test, no dependencies)
+npm test                                  build plus 129 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
 npm run bench:api                         which Angular APIs exist in which majors, and their stability
@@ -231,8 +243,8 @@ does not lose members declared in legacy shapes.
 
 ## Status
 
-All six tools work. 118 tests, all green. Verified on six fixtures and on two production
-codebases (1298 and 227 components, zero parse errors), plus one project running Angular 16 to
+All six tools work. 129 tests, all green. Verified on six fixtures and on two production
+codebases (1298 and 407 components, zero parse errors), plus one project running Angular 16 to
 check that out-of-range refusals are structured rather than silent.
 
 Measured latency on both production workspaces: the language-server tools pay 8–28 s of cold
@@ -241,7 +253,7 @@ in 250–600 ms on the first call and in milliseconds once the project's TypeScr
 A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
 so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
 
-Not done yet: base-class resolution in the contract, and the two remaining token-saving
+Not done yet: host-directive members in the contract, and the two remaining token-saving
 scenarios.
 
 `CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
