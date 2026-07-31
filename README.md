@@ -28,7 +28,8 @@ instructions that produce APIs which do not exist. Measured examples are in
 
 ## Tools
 
-Six tools, 1093 characters of descriptions in total. Answers are dense JSON with no markdown.
+Six tools, 921 characters of descriptions in total (1540 with parameter descriptions,
+measured over `tools/list`). Answers are dense JSON with no markdown.
 
 | Tool | What it answers | Needs the language server |
 |---|---|---|
@@ -37,7 +38,7 @@ Six tools, 1093 characters of descriptions in total. Answers are dense JSON with
 | `ng_component_info` | the public contract of a component or directive | no |
 | `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
 | `ng_version_rules` | what exists and what does not in this project's Angular version | no |
-| `ng_find_usages` | where a component, directive or pipe is used; with `input` — where that input is bound | no |
+| `ng_find_usages` | where a component, directive, pipe or service is used; with `input` — where that input is bound | no |
 
 Four of the six never start the language server, so they answer in milliseconds and keep
 working on workspaces where the server refuses to load.
@@ -47,23 +48,26 @@ working on workspaces where the server refuses to load.
 `ng_component_info` returns the public contract of a component rather than its source. Measured
 across two production codebases through a real MCP client (`npm run bench:contract`):
 
-| | Nx monorepo | CLI workspace |
+| | Nx monorepo | CLI workspace\* |
 |---|---|---|
 | Angular / TypeScript | 19.2.18 / 5.8.3 | 17.3.8 / 5.3.3 |
 | Components in the tally | 1298 | 407 |
 | Parse errors | 0 | 0 |
-| Sources | 5 404 314 chars | 1 735 223 chars |
-| Contracts (base-class members included) | 1 870 205 chars | 463 563 chars |
-| **Saved** | **65%** | **73%** |
-| **Saved in tokens** (o200k_base proxy) | **64%** (cl100k 65%) | **71%** (cl100k 71%) |
-| Contract shorter than source | 1173 of 1298 (90%) | 386 of 407 (95%) |
-| Ratio, median | 0.44 (p10 0.21, p90 0.99) | 0.33 (p10 0.19, p90 0.83) |
-| Token ratio, median | 0.47 (p10 0.21, p90 1.05) | 0.35 (p10 0.20, p90 0.93) |
+| Sources | 5 404 708 chars | 1 735 223 chars |
+| Contracts (base-class members included) | 1 759 331 chars | 463 563 chars |
+| **Saved** | **67%** | **73%** |
+| **Saved in tokens** (o200k_base proxy) | **67%** (cl100k 68%) | **71%** (cl100k 71%) |
+| Contract shorter than source | 1201 of 1298 (93%) | 386 of 407 (95%) |
+| Ratio, median | 0.44 (p10 0.20, p90 0.91) | 0.33 (p10 0.19, p90 0.83) |
+| Token ratio, median | 0.46 (p10 0.20, p90 0.96) | 0.35 (p10 0.20, p90 0.93) |
 | Flagged as partial | 1 of 1298 | 3 of 407 |
-| First call (loads the project's TypeScript) | 300 ms | 564 ms |
+| First call (loads the project's TypeScript) | 306 ms | 564 ms |
 
-The largest component in the monorepo shrinks from **177 863 to 10 693 characters** while
-listing 119 contract members. Contracts now include members inherited from base classes —
+\* the CLI column was measured with the pre-0.1.2 wire format and has not been re-run since;
+the leaner format only shrinks contracts, so its saving is a floor.
+
+The largest component in the monorepo shrinks from **177 863 to 10 770 characters** while
+listing 117 contract members. Contracts now include members inherited from base classes —
 the extends chain is resolved through relative imports and tsconfig path aliases, barrels
 included — which is why the saving is a few points lower than a contract that stopped at
 the class's own body: those members were previously missing, not saved. Before the
@@ -71,6 +75,16 @@ resolver, 91 of 1298 monorepo contracts were flagged as partial; now 1 is (a bas
 static resolver refuses to guess about). In the CLI workspace 29 more files sit in a
 sibling app with no `node_modules` installed and are refused with an error saying exactly
 that.
+
+The wire format is shaped by field feedback and re-measured after every change. Since 0.1.2:
+`required` and `isSignal` appear only when true; lifecycle hooks collapse to a list of names
+(their signatures are fixed by Angular and carry nothing); `implements` is read with the
+ancestors' clauses merged in — `ControlValueAccessor` in the answer is how an agent learns
+"this is a form control" without opening the file; a method with an empty body is marked
+`noop` (a no-op `registerOnTouched() {}` means touched never propagates — previously a whole
+file read to find out); and since 0.1.3 `providers`/`viewProviders` come as written, never
+merged from ancestors, because Angular replaces rather than merges them. The format pass cut
+the same corpus by 8.1% in tokens; `providers` bought 1.5% back as new information.
 
 Three caveats that must travel with these numbers:
 
@@ -185,7 +199,10 @@ Every answer that is incomplete says so, in words, inside the answer:
 - `ng_version_rules` reports `notMeasured` topics and a `caveat` when your minor differs from the
   measured one;
 - `ng_find_usages` labels a declaration as `declaration` rather than a usage, and admits that
-  class-name matches were found without resolving imports;
+  class-name matches were found without resolving imports; a second declaration of the same
+  selector — a b2b/b2c twin in a monorepo — is named in the answer with a warning that the
+  usages are not attributed to one component, and when a file exports several classes their
+  mixed usages are said out loud too;
 - `ng_template_diagnostics` separates three states that all look like an empty list: the template
   is clean, the server is not answering (caught by a canary probe, because three of the four ways
   this server fails are completely silent), and template checking is switched off for this project
@@ -198,10 +215,13 @@ app and "the template is clean" in the next. Verified against both.
 ## What this is not
 
 - **`ng_find_usages` is not better than a careful `grep`.** Measured: `grep -rn "<app-widget"`
-  finds exactly the same 62 usages. What the tool adds is that you do not need to know the
-  selector (it is derived from the file), that element/attribute/pipe/class/declaration kinds are
-  labelled, that all four attribute spellings are covered, and that a closing tag is not counted
-  as a second usage.
+  finds exactly the same 62 usages, and on a service file the class-name fallback finds the same
+  9 injection sites as grep. What the tool adds is that you do not need to know the selector or
+  extract the class name (both are derived from the file), that
+  element/attribute/pipe/class/declaration kinds are labelled, that all four attribute spellings
+  are covered, that a closing tag is not counted as a second usage, and that `path` scopes the
+  scan — in the measured monorepo 33 selectors are declared in both applications at once, and an
+  unscoped search mixes them (the answer says so).
 - **Not a replacement for the Angular CLI MCP** — a different layer. Verified by running it
   in July 2026: nine tools (docs search, best practices, project listing, build and devserver
   orchestration, an OnPush migration), none touching templates or the language server. It
@@ -216,7 +236,9 @@ keeps its name but not its type, and nested host directives are not expanded (th
 so); a base class from a package or behind a mixin call stops the ancestor walk (1 of 1298
 components in the measured monorepo); Nx repositories with inferred targets yield projects
 without `tsConfig`; an attribute selector inside a CSS rule in `styles: [...]` counts as a
-directive usage.
+directive usage; pipe twins are not detected (a bare `name:` key is too noisy without the
+AST); a file holding both a decorator and a `TestBed.overrideComponent` with the same
+selector can read as a false twin.
 
 ## Requirements and setup
 
@@ -235,7 +257,7 @@ npm install -g @alex-apps/ng-token-saver
 ```
 
 After that every client config below shortens to `"command": "ng-token-saver"` with no args.
-The installed layout is verified by running: the packed tarball (75 kB, dist only) was
+The installed layout is verified by running: the packed tarball (79 kB, dist only) was
 installed into a clean prefix and all four tool kinds answered through a real MCP client.
 
 **From source:**
@@ -300,7 +322,7 @@ Configuration, both variables optional:
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 145 unit tests (node:test, no dependencies)
+npm test                                  build plus 162 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:settle                      whether a pause after didOpen is needed (it is not)
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
@@ -321,7 +343,7 @@ does not lose members declared in legacy shapes.
 
 ## Status
 
-All six tools work. 145 tests, all green. Every topic of `ng_version_rules` is measured and
+All six tools work. 162 tests, all green. Every topic of `ng_version_rules` is measured and
 no timing constant is eyeballed anymore: the post-open settle pause turned out to be
 unnecessary (90+ measured opens, zero empty answers) and was removed, making cold per-file
 calls ~1 s faster. Verified on six fixtures and on two production
@@ -333,6 +355,11 @@ start on the first call and answer in 2–9 ms after it; the four tools that nee
 in 250–600 ms on the first call and in milliseconds once the project's TypeScript is cached.
 A session idle for 15 minutes shuts its ngserver down (verified against the OS process list),
 so a returning agent pays the cold start again — see `NG_TOKEN_SAVER_IDLE_MS` above.
+
+The stdio shutdown convention is honored since 0.1.2: on stdin EOF the server answers the
+calls still in flight, flushes stdout, kills its ngserver children and exits on its own.
+Before that a one-shot pipe (`printf ... | ng-token-saver`) hung forever, and an impatient
+client escalating to SIGTERM lost the answer of a call in flight.
 
 Signal Forms, measured: the `@angular/forms/signals` entry point exists only from v21, is
 experimental there, and is stable on 22.0.8; `AbstractControl.events` exists from v18;
