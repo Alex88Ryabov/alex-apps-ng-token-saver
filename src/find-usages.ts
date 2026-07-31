@@ -31,6 +31,9 @@ export interface Usage {
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.angular', '.nx', 'coverage', 'out-tsc', 'tmp']);
 const CONTEXT_LIMIT = 120;
+// Presentation cap for the twin-declaration note, chosen by eye, not measured; the count
+// stays honest via 'and N more'.
+const TWIN_LIST_LIMIT = 5;
 
 // An Angular selector is a comma-separated list, and each part can mix an element, attributes
 // and classes: 'button[appButton], [appButton]'. :not(...) describes absence, so its contents
@@ -111,6 +114,31 @@ export function targetFromSelector(selector: string): Target {
     pipes: asPipe,
     classNames: [],
   };
+}
+
+// A second declaration of the same selector - a b2b/b2c twin in a monorepo - makes the hit
+// list a mix: the search is textual and cannot attribute a template to one of the twins,
+// so the answer must say the mix out loud. Counted per file: the declaring file itself
+// legitimately holds one, and a second one even there is a twin. Files without the
+// decorator are skipped - a bare selector: key (a config object, TestBed.overrideComponent)
+// is not a declaration. Pipes are not checked at all: a bare name: key is everywhere in
+// plain objects, too noisy without the AST.
+function declarationsOf(text: string, target: Target): number {
+  if (!/@(Component|Directive)\s*\(/.test(text)) {
+    return 0;
+  }
+  const declarations = /\bselector\s*:\s*(['"`])([^'"`]*)\1/g;
+  let count = 0;
+  for (const match of text.matchAll(declarations)) {
+    const declared = parseSelector(match[2] ?? '');
+    if (
+      declared.elements.some((item) => target.elements.includes(item)) ||
+      declared.attributes.some((item) => target.attributes.includes(item))
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function escape(value: string): string {
@@ -312,6 +340,9 @@ export function findUsages(
   const seenTags = new Set<string>();
 
   let codeHits = 0;
+  const twins: string[] = [];
+  let declarationsSeen = 0;
+  const tagTarget = target.elements.length > 0 || target.attributes.length > 0;
   for (const file of scan.files) {
     const declaring = options.declaredIn !== undefined && file.toLowerCase() === options.declaredIn.toLowerCase();
     let original;
@@ -321,6 +352,11 @@ export function findUsages(
       continue;
     }
     const text = stripComments(original, file.endsWith('.html'));
+    const declarationsHere = tagTarget && file.endsWith('.ts') ? declarationsOf(text, target) : 0;
+    if (declarationsHere > (declaring ? 1 : 0)) {
+      twins.push(relative(root, file).replace(/\\/g, '/'));
+    }
+    declarationsSeen += declarationsHere;
     // Built lazily per file, and only when the filter needs to map hits onto their tags.
     let spans: TagSpan[] | null = null;
     for (const pattern of patterns) {
@@ -413,7 +449,9 @@ export function findUsages(
     notes.push(`showing the first ${usages.length} of ${total}`);
   }
   if (scan.truncated) {
-    notes.push(`the walk stopped at ${scan.files.length} files, so the workspace was not fully scanned`);
+    notes.push(
+      `the walk stopped at ${scan.files.length} files, so the workspace was not fully scanned, twin detection included`,
+    );
   }
   if (patterns.length === 0) {
     notes.push('neither a selector nor a pipe name could be extracted from the target, so there was nothing to search for');
@@ -421,6 +459,16 @@ export function findUsages(
   if (codeHits > 0) {
     notes.push(
       `${codeHits} matches of kind code were found by class name without resolving imports, so same-named classes from other modules may be included`,
+    );
+  }
+  // With a known declaring file one twin is already a mix; by bare selector a single
+  // declaration is just the component itself, and only a second one makes the mix.
+  if (twins.length > 0 && (options.declaredIn !== undefined || declarationsSeen > 1)) {
+    const listed = twins.slice(0, TWIN_LIST_LIMIT).join(', ');
+    const rest = twins.length > TWIN_LIST_LIMIT ? ` and ${twins.length - TWIN_LIST_LIMIT} more` : '';
+    const also = options.declaredIn !== undefined ? 'also ' : '';
+    notes.push(
+      `the selector is ${also}declared in ${listed}${rest}, so usages are not attributed to one component`,
     );
   }
   return {

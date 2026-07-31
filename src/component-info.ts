@@ -16,8 +16,9 @@ type TypeScriptApi = typeof TS;
 export interface InputInfo {
   name: string;
   type: string | null;
-  required: boolean;
-  isSignal: boolean;
+  /** Present only when true: absence is the wire form of false, on both flags. */
+  required?: true;
+  isSignal?: true;
   alias: string | null;
 }
 
@@ -31,6 +32,8 @@ export interface MemberInfo {
   name: string;
   kind: 'property' | 'method' | 'accessor' | 'signal';
   signature: string;
+  /** Only on methods with an empty body: a noop registerOnTouched() never reports touched. */
+  noop?: true;
 }
 
 export interface ComponentContract {
@@ -48,11 +51,15 @@ export interface ComponentContract {
   hostDirectives: string[];
   /** The direct base class as written; resolveAncestors merges its members when it can. */
   extends: string | null;
+  /** Heritage as written, ancestors' clauses merged in: ControlValueAccessor here answers 'is this a form control'. */
+  implements: string[];
   /** Resolved extends chain whose members are merged below, nearest ancestor first. */
   ancestors: string[] | null;
   inputs: InputInfo[];
   outputs: OutputInfo[];
   publicMembers: MemberInfo[];
+  /** Hook names only: the eight signatures are fixed by Angular and carry nothing else. */
+  lifecycle: string[];
   /** Says in words that the lists are partial: otherwise 'no such input' and 'input lives in another file' look the same. */
   incomplete: string | null;
 }
@@ -191,6 +198,7 @@ function contractOf(
     imports: textArrayProp(ts, meta, 'imports'),
     hostDirectives: hostDirectiveSpecs.map((spec) => spec.name),
     extends: baseClass,
+    implements: implementsOf(ts, node),
     ancestors: null,
     ...members,
     incomplete: incompletenessOf(ts, node.getSourceFile(), baseClass, hostDirectiveSpecs),
@@ -201,6 +209,7 @@ interface MemberBag {
   inputs: InputInfo[];
   outputs: OutputInfo[];
   publicMembers: MemberInfo[];
+  lifecycle: string[];
 }
 
 // Shared by the component itself and by every ancestor: a base class carries the same
@@ -210,9 +219,7 @@ function collectMembers(
   node: TS.ClassDeclaration,
   meta: TS.ObjectLiteralExpression | null,
 ): MemberBag {
-  const inputs: InputInfo[] = [];
-  const outputs: OutputInfo[] = [];
-  const publicMembers: MemberInfo[] = [];
+  const bag: MemberBag = { inputs: [], outputs: [], publicMembers: [], lifecycle: [] };
 
   // A get/set pair is two members sharing a name, and @Input can sit on either half.
   const groups = new Map<string, TS.ClassElement[]>();
@@ -229,24 +236,18 @@ function collectMembers(
     }
   }
   for (const [name, group] of groups) {
-    classifyMember(ts, group, name, inputs, outputs, publicMembers);
+    classifyMember(ts, group, name, bag);
   }
   // Legacy form: inputs/outputs as string lists in the decorator. The field is declared in the
   // class and already parsed with its real type, so we move it rather than duplicate it as null.
   declaredInMeta(ts, meta, 'inputs').forEach((item) => {
-    const known = takeMember(publicMembers, item.name);
-    inputs.push({
-      name: item.name,
-      type: known,
-      required: false,
-      isSignal: false,
-      alias: item.alias,
-    });
+    const known = takeMember(bag.publicMembers, item.name);
+    bag.inputs.push({ name: item.name, type: known, alias: item.alias });
   });
   declaredInMeta(ts, meta, 'outputs').forEach((item) => {
-    outputs.push({ name: item.name, type: emitted(takeMember(publicMembers, item.name)), alias: item.alias });
+    bag.outputs.push({ name: item.name, type: emitted(takeMember(bag.publicMembers, item.name)), alias: item.alias });
   });
-  return { inputs, outputs, publicMembers };
+  return bag;
 }
 
 // The partial-contract flag must be in the answer itself and in words: the agent is not obliged
@@ -306,9 +307,7 @@ function classifyMember(
   ts: TypeScriptApi,
   group: TS.ClassElement[],
   name: string,
-  inputs: InputInfo[],
-  outputs: OutputInfo[],
-  publicMembers: MemberInfo[],
+  bag: MemberBag,
 ): void {
   // For a get/set pair the decorator can sit on either half, in any order in the file.
   // For an overloaded method take the implementation: its signature is how you actually call it.
@@ -326,51 +325,76 @@ function classifyMember(
   if (decorator) {
     const options = aliasAndRequired(ts, decorator.args);
     if (decorator.name === 'Input') {
-      inputs.push({
-        name,
-        type: declared,
-        required: options.required,
-        isSignal: false,
-        alias: options.alias,
-      });
+      const input: InputInfo = { name, type: declared, alias: options.alias };
+      if (options.required) {
+        input.required = true;
+      }
+      bag.inputs.push(input);
     } else {
-      outputs.push({ name, type: emitted(declared), alias: options.alias });
+      bag.outputs.push({ name, type: emitted(declared), alias: options.alias });
     }
     return;
   }
 
   const call = initializer && ts.isCallExpression(initializer) ? factoryCall(ts, initializer) : null;
   if (call?.factory === 'input' || call?.factory === 'model') {
-    inputs.push({
-      name,
-      type: call.type,
-      required: call.required,
-      isSignal: true,
-      alias: call.alias,
-    });
+    const input: InputInfo = { name, type: call.type, isSignal: true, alias: call.alias };
+    if (call.required) {
+      input.required = true;
+    }
+    bag.inputs.push(input);
     // model is a pair: an input plus a <name>Change output that is nowhere in the class body.
     if (call.factory === 'model') {
-      outputs.push({ name: `${name}Change`, type: call.type, alias: call.alias ? `${call.alias}Change` : null });
+      bag.outputs.push({ name: `${name}Change`, type: call.type, alias: call.alias ? `${call.alias}Change` : null });
     }
     return;
   }
   if (call?.factory === 'output') {
-    outputs.push({ name, type: call.type, alias: call.alias });
+    bag.outputs.push({ name, type: call.type, alias: call.alias });
     return;
   }
 
+  // Hooks are also written as function-valued fields (this-binding); Angular calls
+  // instance.ngOnInit() the same way in both shapes, so the name must not get lost.
+  const functionField =
+    initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer));
+  if (LIFECYCLE_HOOKS.has(name) && functionField) {
+    bag.lifecycle.push(name);
+    return;
+  }
   if (ts.isMethodDeclaration(member)) {
-    publicMembers.push({ name, kind: 'method', signature: methodSignature(ts, member, name) });
+    if (LIFECYCLE_HOOKS.has(name)) {
+      bag.lifecycle.push(name);
+      return;
+    }
+    const method: MemberInfo = { name, kind: 'method', signature: methodSignature(ts, member, name) };
+    if (member.body && member.body.statements.length === 0) {
+      method.noop = true;
+    }
+    bag.publicMembers.push(method);
     return;
   }
   if (call && SIGNAL_FACTORIES.has(call.factory)) {
     // Signals are called in templates, so a signature with parentheses is the most useful thing here.
-    publicMembers.push({ name, kind: 'signal', signature: `${name}()${suffix(call.type)}` });
+    bag.publicMembers.push({ name, kind: 'signal', signature: `${name}()${suffix(call.type)}` });
     return;
   }
   const kind = ts.isPropertyDeclaration(member) ? 'property' : 'accessor';
-  publicMembers.push({ name, kind, signature: `${name}${suffix(declared)}` });
+  bag.publicMembers.push({ name, kind, signature: `${name}${suffix(declared)}` });
 }
+
+// The eight hooks' signatures are fixed by Angular, so the contract keeps names only:
+// ngOnInit(): void spelled out on every component says nothing.
+const LIFECYCLE_HOOKS = new Set([
+  'ngOnChanges',
+  'ngOnInit',
+  'ngDoCheck',
+  'ngAfterContentInit',
+  'ngAfterContentChecked',
+  'ngAfterViewInit',
+  'ngAfterViewChecked',
+  'ngOnDestroy',
+]);
 
 // Knowing a member is a signal matters more than its type for template work: it needs parentheses.
 // resource() and httpResource() are excluded: they return ResourceRef, an interface with a
@@ -537,6 +561,15 @@ function baseClassOf(ts: TypeScriptApi, node: TS.ClassDeclaration): string | nul
   return null;
 }
 
+function implementsOf(ts: TypeScriptApi, node: TS.ClassDeclaration): string[] {
+  for (const clause of node.heritageClauses ?? []) {
+    if (clause.token === ts.SyntaxKind.ImplementsKeyword) {
+      return clause.types.map((type) => type.getText().replace(/\s+/g, ' '));
+    }
+  }
+  return [];
+}
+
 function propOf(
   ts: TypeScriptApi,
   meta: TS.ObjectLiteralExpression | null,
@@ -694,12 +727,19 @@ export function resolveAncestors(
     inputs: [...contract.inputs],
     outputs: [...contract.outputs],
     publicMembers: [...contract.publicMembers],
+    lifecycle: [...contract.lifecycle],
+    implements: [...contract.implements],
   };
   // The component itself is pre-visited, or a (broken) extends cycle would merge it into itself.
   const visited = new Set<string>([`${file.toLowerCase()}#${contract.className}`]);
   const chain = walkExtends(ts, sourceOf, projectRoot, file, contract.extends, visited);
   for (const step of chain.steps) {
     mergeInherited(merged, step.bag);
+    for (const written of step.implements) {
+      if (!merged.implements.includes(written)) {
+        merged.implements.push(written);
+      }
+    }
   }
   merged.ancestors = chain.steps.length > 0 ? chain.steps.map((step) => step.name) : null;
 
@@ -748,6 +788,7 @@ export function resolveAncestors(
 interface ChainStep {
   bag: MemberBag;
   hostSpecs: HostDirectiveSpec[];
+  implements: string[];
   file: string;
   name: string;
 }
@@ -795,6 +836,7 @@ function walkExtends(
     steps.push({
       bag: collectMembers(ts, baseNode, meta),
       hostSpecs: hostDirectiveSpecsOf(ts, meta),
+      implements: implementsOf(ts, baseNode),
       file: baseFile,
       name: baseName,
     });
@@ -853,7 +895,7 @@ function exposeFrom(
     if (found) {
       return { ...found, name: outer, alias: null };
     }
-    return { name: outer, type: null, required: false, isSignal: false, alias: null };
+    return { name: outer, type: null, alias: null };
   });
   const outputs = ref.outputs.map((entry) => {
     const { inner, outer } = split(entry);
@@ -919,6 +961,12 @@ function mergeInherited(target: MemberBag, inherited: MemberBag): void {
     }
   }
   inherited.publicMembers.forEach((item) => push(target.publicMembers, item));
+  // A child hook shadows the ancestor's: Angular calls one implementation, so one name.
+  for (const hook of inherited.lifecycle) {
+    if (!target.lifecycle.includes(hook)) {
+      target.lifecycle.push(hook);
+    }
+  }
 }
 
 function findClassIn(ts: TypeScriptApi, source: TS.SourceFile, name: string): TS.ClassDeclaration | null {

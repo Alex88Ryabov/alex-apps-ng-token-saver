@@ -292,6 +292,113 @@ test('a declaration is separated from a usage, and the own file is excluded', as
   await rm(root, { recursive: true, force: true });
 });
 
+// ---- Twin declarations: the same selector declared twice makes the hit list a mix ----
+
+const PHONE_DECLARATION = "@Component({ selector: 'app-phone', template: '' })\nexport class PhoneComponent {}";
+
+test('a twin declaration of the same selector is named: usages are a mix', async () => {
+  const root = await workspace({
+    'apps/b2b/phone.component.ts': PHONE_DECLARATION,
+    'apps/b2c/phone.component.ts': PHONE_DECLARATION,
+    'apps/b2b/page.component.html': '<app-phone></app-phone>',
+    'apps/b2c/page.component.html': '<app-phone></app-phone>',
+  });
+  try {
+    const byFile = scan(root, targetOf(ts, PHONE_DECLARATION, 'phone.component.ts'), {
+      declaredIn: join(root, 'apps/b2b/phone.component.ts'),
+    });
+    assert.match(byFile.incomplete, /also declared in apps\/b2c\/phone\.component\.ts/);
+    assert.match(byFile.incomplete, /not attributed to one component/);
+    assert.equal(byFile.usages.filter((item) => item.kind === 'element').length, 2);
+
+    // By bare selector the declaring file is unknown: two sites make the mix, both are named.
+    const byString = scan(root, targetFromSelector('app-phone'));
+    assert.match(
+      byString.incomplete,
+      /declared in apps\/b2b\/phone\.component\.ts, apps\/b2c\/phone\.component\.ts/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an attribute selector twin is detected too', async () => {
+  const declaration = "@Directive({ selector: '[appDnd]' })\nexport class DndDirective {}";
+  const root = await workspace({
+    'apps/b2b/dnd.directive.ts': declaration,
+    'apps/b2c/dnd.directive.ts': declaration.replace('DndDirective', 'DndTwinDirective'),
+    'apps/b2b/page.component.html': '<div appDnd></div>',
+  });
+  try {
+    const report = scan(root, targetOf(ts, declaration, 'dnd.directive.ts'), {
+      declaredIn: join(root, 'apps/b2b/dnd.directive.ts'),
+    });
+    assert.match(report.incomplete, /also declared in apps\/b2c\/dnd\.directive\.ts/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('two declarations of one selector in a single file are a twin too', async () => {
+  const twoInOne = [
+    "@Component({ selector: 'app-phone', template: '' })",
+    'export class PhoneComponent {}',
+    "@Component({ selector: 'app-phone', template: '<div></div>' })",
+    'export class PhoneLegacyComponent {}',
+  ].join('\n');
+  const root = await workspace({
+    'apps/b2b/phone.component.ts': twoInOne,
+    'apps/b2b/page.component.html': '<app-phone></app-phone>',
+  });
+  try {
+    const byFile = scan(root, targetOf(ts, twoInOne, 'phone.component.ts'), {
+      declaredIn: join(root, 'apps/b2b/phone.component.ts'),
+    });
+    assert.match(byFile.incomplete, /also declared in apps\/b2b\/phone\.component\.ts/);
+
+    // By bare selector the two declarations in one file are one listed site, still a mix.
+    const byString = scan(root, targetFromSelector('app-phone'));
+    assert.match(byString.incomplete, /not attributed to one component/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a selector key outside a decorator is not a twin', async () => {
+  const root = await workspace({
+    'apps/b2b/phone.component.ts': PHONE_DECLARATION,
+    'apps/b2b/legacy.config.ts': "export const widgets = [{ selector: 'app-phone', kind: 'legacy' }];",
+    'apps/b2b/page.component.html': '<app-phone></app-phone>',
+  });
+  try {
+    const report = scan(root, targetOf(ts, PHONE_DECLARATION, 'phone.component.ts'), {
+      declaredIn: join(root, 'apps/b2b/phone.component.ts'),
+    });
+    assert.ok(!/declared in/.test(report.incomplete ?? ''), 'a config object must not read as a declaration');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a unique selector gets no twin note, and one bare-selector site is not a twin', async () => {
+  const root = await workspace({
+    'apps/b2b/phone.component.ts': PHONE_DECLARATION,
+    'apps/b2b/page.component.html': '<app-phone></app-phone>',
+  });
+  try {
+    const byFile = scan(root, targetOf(ts, PHONE_DECLARATION, 'phone.component.ts'), {
+      declaredIn: join(root, 'apps/b2b/phone.component.ts'),
+    });
+    assert.ok(!/declared in/.test(byFile.incomplete ?? ''), 'no twin note by file');
+
+    // The single declaration site by bare selector is the component itself, not a twin.
+    const byString = scan(root, targetFromSelector('app-phone'));
+    assert.ok(!/not attributed/.test(byString.incomplete ?? ''), 'no twin note by selector');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('truncation is admitted in words while total counts everything', async () => {
   const root = await workspace({
     'src/a.component.html': Array.from({ length: 10 }, () => '<app-card></app-card>').join('\n'),

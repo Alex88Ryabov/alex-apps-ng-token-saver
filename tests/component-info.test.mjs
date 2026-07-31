@@ -36,7 +36,7 @@ test('signal input: type from the type argument, required from .required', () =>
   `);
   assert.deepEqual(contract.inputs, [
     { name: 'user', type: 'UserVm', required: true, isSignal: true, alias: null },
-    { name: 'tag', type: 'string | null', required: false, isSignal: true, alias: null },
+    { name: 'tag', type: 'string | null', isSignal: true, alias: null },
   ]);
   assert.equal(contract.inlineTemplate, true);
   assert.equal(contract.templateUrl, null);
@@ -75,9 +75,9 @@ test('alias and required are read from both @Input forms', () => {
   assert.deepEqual(
     contract.inputs.map((item) => [item.name, item.alias, item.required, item.type]),
     [
-      ['inner', 'outer', false, 'string'],
+      ['inner', 'outer', undefined, 'string'],
       ['hidden', 'shown', true, 'number'],
-      ['value', 'val', false, 'number'],
+      ['value', 'val', undefined, 'number'],
     ],
   );
 });
@@ -89,9 +89,7 @@ test('@Input on a setter is an input, and the type comes from the parameter', ()
       @Input() set disabled(value: boolean) { this.flag = value; }
     }
   `);
-  assert.deepEqual(contract.inputs, [
-    { name: 'disabled', type: 'boolean', required: false, isSignal: false, alias: null },
-  ]);
+  assert.deepEqual(contract.inputs, [{ name: 'disabled', type: 'boolean', alias: null }]);
 });
 
 test('in a get/set pair the decorator is seen on either half, in any order', () => {
@@ -102,9 +100,7 @@ test('in a get/set pair the decorator is seen on either half, in any order', () 
       @Input() set value(v: string) { this._value = v; }
     }
   `);
-  assert.deepEqual(setterLast.inputs, [
-    { name: 'value', type: 'string', required: false, isSignal: false, alias: null },
-  ]);
+  assert.deepEqual(setterLast.inputs, [{ name: 'value', type: 'string', alias: null }]);
   assert.deepEqual(setterLast.publicMembers, []);
 
   const setterFirst = one(`
@@ -226,7 +222,7 @@ test('signal members are flagged and shown with parentheses', () => {
       doubled = computed<number>(() => this.count() * 2);
       row = viewChild.required<ElementRef>('row');
       plain = 'text';
-      run(id: number): void {}
+      run(id: number): void { this.count.set(id); }
     }
   `);
   assert.deepEqual(contract.publicMembers, [
@@ -236,6 +232,61 @@ test('signal members are flagged and shown with parentheses', () => {
     { name: 'plain', kind: 'property', signature: 'plain: string' },
     { name: 'run', kind: 'method', signature: 'run(id: number): void' },
   ]);
+});
+
+test('lifecycle hooks collapse to names: their signatures are fixed by Angular', () => {
+  const contract = one(`
+    @Component({ selector: 'a-b', template: '' })
+    export class C implements OnInit, OnDestroy {
+      ngOnInit(): void { this.load(); }
+      ngOnDestroy(): void {}
+      load(): void { fetch('/x'); }
+    }
+  `);
+  assert.deepEqual(contract.lifecycle, ['ngOnInit', 'ngOnDestroy']);
+  assert.deepEqual(contract.implements, ['OnInit', 'OnDestroy']);
+  assert.deepEqual(
+    contract.publicMembers.map((item) => item.name),
+    ['load'],
+  );
+});
+
+test('a hook written as a function-valued field still lands in lifecycle', () => {
+  const contract = one(`
+    @Component({ selector: 'a-b', template: '' })
+    export class C {
+      ngOnInit = () => { this.load(); };
+      ngOnDestroy = function () { this.stop(); };
+      load(): void { fetch('/x'); }
+    }
+  `);
+  assert.deepEqual(contract.lifecycle, ['ngOnInit', 'ngOnDestroy']);
+  assert.deepEqual(
+    contract.publicMembers.map((item) => item.name),
+    ['load'],
+  );
+});
+
+test('an empty method body is marked noop: registerOnTouched() {} never reports touched', () => {
+  const contract = one(`
+    @Component({ selector: 'a-b', template: '' })
+    export class C implements ControlValueAccessor {
+      writeValue(value: string | null): void { this.value = value; }
+      registerOnChange(fn: (value: string) => void): void { this.onChange = fn; }
+      registerOnTouched(): void {}
+    }
+  `);
+  assert.deepEqual(contract.implements, ['ControlValueAccessor']);
+  assert.deepEqual(
+    contract.publicMembers.find((item) => item.name === 'registerOnTouched'),
+    {
+      name: 'registerOnTouched',
+      kind: 'method',
+      signature: 'registerOnTouched(): void',
+      noop: true,
+    },
+  );
+  assert.equal(contract.publicMembers.find((item) => item.name === 'writeValue').noop, undefined);
 });
 
 test('inheritance is visible: base-class inputs will not show up here', () => {
@@ -379,9 +430,7 @@ test('a field declared as an input in the decorator is not duplicated and keeps 
       other = 1;
     }
   `);
-  assert.deepEqual(contract.inputs, [
-    { name: 'size', type: 'string', required: false, isSignal: false, alias: null },
-  ]);
+  assert.deepEqual(contract.inputs, [{ name: 'size', type: 'string', alias: null }]);
   assert.deepEqual(contract.outputs, [{ name: 'done', type: 'number', alias: null }]);
   assert.deepEqual(
     contract.publicMembers.map((item) => item.name),
@@ -578,6 +627,37 @@ test('ancestors: a plain redeclaration over an inherited @Input stays an input',
       [['size', '1 | 2 | 3']],
     );
     assert.ok(!complete.publicMembers.some((item) => item.name === 'size'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ancestors: implements and lifecycle merge from the chain, overrides collapse', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'base.ts'),
+      `export class Base implements OnInit, ControlValueAccessor {
+         ngOnInit(): void { this.setup(); }
+         ngOnDestroy(): void {}
+         setup(): void { this.ready = true; }
+       }`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component, OnInit } from '@angular/core';
+       import { Base } from './base';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base implements OnInit {
+         override ngOnInit(): void { this.extra(); }
+         extra(): void { this.done = true; }
+       }`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.implements, ['OnInit', 'ControlValueAccessor']);
+    assert.deepEqual(complete.lifecycle, ['ngOnInit', 'ngOnDestroy']);
+    assert.ok(complete.publicMembers.some((item) => item.name === 'setup'));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
