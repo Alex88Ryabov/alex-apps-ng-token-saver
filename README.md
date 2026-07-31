@@ -220,7 +220,13 @@ directive usage.
 
 ## Requirements and setup
 
-- **Node ≥ 22.22.3.** The lower bound comes from the newest language-server branch, not the oldest.
+- **Node: declared ≥ 22.22.3, measured down to 18.20.8.** The declared bound is the shipped
+  language-server branch's own `engines` field — and measurement disagrees with it: the
+  published package answered all four tool kinds on clean Node 18.20.8, 20.20.2 and 22.x
+  (fixture-level checks, not a production soak). Either way this is about the MCP server
+  process only — **your project keeps building on its own Node**. An Angular 17 project on
+  Node 18/20 needs nothing changed; and if you prefer a newer runtime just for the server,
+  point the client config at that binary explicitly: `"command": "C:\\node22\\node.exe"`.
 
 **From npm** — the language server ships as a regular dependency, nothing else to install:
 
