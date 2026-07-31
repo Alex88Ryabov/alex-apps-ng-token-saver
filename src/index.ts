@@ -103,7 +103,7 @@ async function tracked(work: () => Promise<ToolResult>): Promise<ToolResult> {
   }
 }
 
-const server = new McpServer({ name: 'ng-token-saver', version: '0.1.2' });
+const server = new McpServer({ name: 'ng-token-saver', version: '0.1.3' });
 
 server.registerTool(
   'ng_template_definition',
@@ -229,9 +229,11 @@ server.registerTool(
             file: path === requested ? null : path,
             angularVersion: project.angularCoreVersion,
             ...complete,
-            // Both lists stay off the wire when empty: a repeated [] carries nothing.
+            // These lists stay off the wire when empty: a repeated [] carries nothing.
             implements: complete.implements.length > 0 ? complete.implements : null,
             lifecycle: complete.lifecycle.length > 0 ? complete.lifecycle : null,
+            providers: complete.providers.length > 0 ? complete.providers : null,
+            viewProviders: complete.viewProviders.length > 0 ? complete.viewProviders : null,
             others: others.length > 0 ? others : null,
           }),
         );
@@ -305,8 +307,8 @@ server.registerTool(
   {
     title: 'Angular: find usages',
     description:
-      'Usages of a component, directive or pipe across the workspace: elements, attribute ' +
-      'selectors, pipes and class references. Accepts a file path or a selector.',
+      'Usages of a component, directive, pipe or service across the workspace: elements, ' +
+      'attribute selectors, pipes and class references. Accepts a file path or a selector.',
     inputSchema: {
       selectorOrFile: z
         .string()

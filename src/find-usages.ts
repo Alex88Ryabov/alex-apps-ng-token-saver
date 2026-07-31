@@ -56,7 +56,12 @@ export function parseSelector(selector: string): { elements: string[]; attribute
   return { elements: [...new Set(elements)], attributes: [...new Set(attributes)] };
 }
 
+// The decorators that make a class an Angular declaration worth searching for.
+const DECLARATION_DECORATORS = new Set(['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule']);
+
 // Take everything the file declares: a @Pipe keeps its name in name, not in selector.
+// A service or a module carries no selector at all - its usages are class-name imports,
+// constructor parameters, inject() calls and providers arrays, which kind 'code' covers.
 export function targetOf(ts: TypeScriptApi, text: string, fileName: string): Target {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const target: Target = { elements: [], attributes: [], pipes: [], classNames: [] };
@@ -67,12 +72,14 @@ export function targetOf(ts: TypeScriptApi, text: string, fileName: string): Tar
     for (const decorator of ts.getDecorators(statement) ?? []) {
       const call = ts.isCallExpression(decorator.expression) ? decorator.expression : null;
       const name = (call ? call.expression : decorator.expression).getText().split('.').pop();
-      const meta = call?.arguments[0];
-      if (!meta || !ts.isObjectLiteralExpression(meta)) {
+      if (!name || !DECLARATION_DECORATORS.has(name)) {
         continue;
       }
+      // @Injectable() is legally argument-free, so the metadata object is optional here.
+      const first = call?.arguments[0];
+      const meta = first && ts.isObjectLiteralExpression(first) ? first : null;
       const written = (key: string): string | null => {
-        for (const property of meta.properties) {
+        for (const property of meta?.properties ?? []) {
           if (ts.isPropertyAssignment(property) && property.name.getText() === key) {
             return ts.isStringLiteralLike(property.initializer) ? property.initializer.text : null;
           }
@@ -91,15 +98,40 @@ export function targetOf(ts: TypeScriptApi, text: string, fileName: string): Tar
         if (pipe) {
           target.pipes.push(pipe);
         }
-      } else {
-        continue;
       }
       if (statement.name) {
         target.classNames.push(statement.name.text);
       }
     }
   }
-  return target;
+  // No Angular declaration in the file: an abstract base or a model class is still asked
+  // about, so exported class names answer the honest 'who uses this class'.
+  if (
+    target.elements.length === 0 &&
+    target.attributes.length === 0 &&
+    target.pipes.length === 0 &&
+    target.classNames.length === 0
+  ) {
+    for (const statement of source.statements) {
+      if (!ts.isClassDeclaration(statement) || !statement.name) {
+        continue;
+      }
+      const exported = (ts.getModifiers(statement) ?? []).some(
+        (item) => item.kind === ts.SyntaxKind.ExportKeyword,
+      );
+      if (exported) {
+        target.classNames.push(statement.name.text);
+      }
+    }
+  }
+  // One name searched once: a twin selector in the same file or a doubled decorator
+  // must not double every count downstream.
+  return {
+    elements: [...new Set(target.elements)],
+    attributes: [...new Set(target.attributes)],
+    pipes: [...new Set(target.pipes)],
+    classNames: [...new Set(target.classNames)],
+  };
 }
 
 // 'Looks like an element selector' is all one can tell from a bare string.
@@ -454,11 +486,20 @@ export function findUsages(
     );
   }
   if (patterns.length === 0) {
-    notes.push('neither a selector nor a pipe name could be extracted from the target, so there was nothing to search for');
+    notes.push(
+      'neither a selector, a pipe name nor a class name could be extracted from the target, so there was nothing to search for',
+    );
   }
   if (codeHits > 0) {
     notes.push(
       `${codeHits} matches of kind code were found by class name without resolving imports, so same-named classes from other modules may be included`,
+    );
+  }
+  // A file can export several unrelated classes; summing their usages silently would
+  // read as one precise answer, so the mix is spelled out.
+  if (tagTarget === false && target.pipes.length === 0 && target.classNames.length > 1) {
+    notes.push(
+      `usages of ${target.classNames.length} classes are mixed in one list: ${target.classNames.join(', ')}`,
     );
   }
   // With a known declaring file one twin is already a mix; by bare selector a single

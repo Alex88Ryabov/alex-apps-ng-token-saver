@@ -196,7 +196,7 @@ test('a selector is split into elements and attributes, and :not does not count'
   });
 });
 
-test('target from a file: component, directive and pipe are parsed together', () => {
+test('target from a file: component, directive, pipe and service are parsed together', () => {
   const target = targetOf(
     ts,
     `
@@ -214,7 +214,71 @@ test('target from a file: component, directive and pipe are parsed together', ()
   assert.deepEqual(target.elements, ['app-card']);
   assert.deepEqual(target.attributes, ['appDrag']);
   assert.deepEqual(target.pipes, ['money']);
-  assert.deepEqual(target.classNames, ['CardComponent', 'DragDirective', 'MoneyPipe']);
+  assert.deepEqual(target.classNames, ['CardComponent', 'DragDirective', 'MoneyPipe', 'Service']);
+});
+
+test('a service file falls back to the class name: who injects it', async () => {
+  const service = "@Injectable({ providedIn: 'root' })\nexport class UserIdentityService {}";
+  const root = await workspace({
+    'src/user-identity.service.ts': service,
+    'src/login.component.ts':
+      'import { UserIdentityService } from "./user-identity.service";\n' +
+      'export class LoginComponent { constructor(private identity: UserIdentityService) {} }',
+    'src/guard.ts': 'const identity = inject(UserIdentityService);',
+  });
+  try {
+    const target = targetOf(ts, service, 'user-identity.service.ts');
+    assert.deepEqual(target.classNames, ['UserIdentityService']);
+    const report = scan(root, target, { declaredIn: join(root, 'src/user-identity.service.ts') });
+    assert.deepEqual(
+      report.usages.map((item) => item.file).sort(),
+      ['src/guard.ts', 'src/login.component.ts', 'src/login.component.ts'],
+    );
+    assert.ok(report.usages.every((item) => item.kind === 'code'));
+    assert.match(report.incomplete, /without resolving imports/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('argument-free @Injectable and @NgModule are targets too', () => {
+  assert.deepEqual(targetOf(ts, '@Injectable()\nexport class PlainService {}', 'x.ts').classNames, [
+    'PlainService',
+  ]);
+  assert.deepEqual(targetOf(ts, '@NgModule({})\nexport class SharedModule {}', 'x.ts').classNames, [
+    'SharedModule',
+  ]);
+});
+
+test('several exported classes are searched together, and the mix is spelled out', async () => {
+  const models = 'export class OrderVm {}\nexport class OrderLineVm {}';
+  const root = await workspace({
+    'src/models.ts': models,
+    'src/a.ts': 'import { OrderVm } from "./models";',
+    'src/b.ts': 'import { OrderLineVm } from "./models";',
+  });
+  try {
+    const target = targetOf(ts, models, 'models.ts');
+    assert.deepEqual(target.classNames, ['OrderVm', 'OrderLineVm']);
+    const report = scan(root, target, { declaredIn: join(root, 'src/models.ts') });
+    assert.equal(report.total, 2);
+    assert.match(report.incomplete, /usages of 2 classes are mixed in one list: OrderVm, OrderLineVm/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a plain exported class is a fallback target, but never next to a declaration', () => {
+  const fallback = targetOf(ts, 'export abstract class BaseWidget {}\nclass Hidden {}', 'base.ts');
+  assert.deepEqual(fallback.classNames, ['BaseWidget'], 'only the exported class');
+
+  // A file with a component keeps its precise target: the helper class is not added.
+  const precise = targetOf(
+    ts,
+    "@Component({ selector: 'app-card', template: '' })\nexport class CardComponent {}\nexport class CardHelper {}",
+    'card.component.ts',
+  );
+  assert.deepEqual(precise.classNames, ['CardComponent']);
 });
 
 test('a bare word is also searched as a pipe, a dashed one only as an element', () => {
@@ -355,6 +419,8 @@ test('two declarations of one selector in a single file are a twin too', async (
       declaredIn: join(root, 'apps/b2b/phone.component.ts'),
     });
     assert.match(byFile.incomplete, /also declared in apps\/b2b\/phone\.component\.ts/);
+    // The selector repeats in the file, but the target holds it once: one usage counts once.
+    assert.equal(byFile.usages.filter((item) => item.kind === 'element').length, 1);
 
     // By bare selector the two declarations in one file are one listed site, still a mix.
     const byString = scan(root, targetFromSelector('app-phone'));

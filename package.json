@@ -1,6 +1,6 @@
 {
   "name": "@alex-apps/ng-token-saver",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MCP server for Angular: compiler-backed template answers, component contracts and version-accurate facts that save AI agents tokens",
   "license": "GPL-3.0-or-later",
   "author": "Alex Ryabov",

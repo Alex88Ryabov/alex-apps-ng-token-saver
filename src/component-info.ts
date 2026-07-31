@@ -47,6 +47,9 @@ export interface ComponentContract {
   inlineTemplate: boolean;
   styleUrls: string[];
   imports: string[];
+  /** As written in the decorator; never merged from ancestors - Angular replaces, not merges. */
+  providers: string[];
+  viewProviders: string[];
   /** Host directive names; resolveAncestors merges what their object form exposes. */
   hostDirectives: string[];
   /** The direct base class as written; resolveAncestors merges its members when it can. */
@@ -196,6 +199,8 @@ function contractOf(
     inlineTemplate: propOf(ts, meta, 'template') !== null,
     styleUrls: [...stringArrayProp(ts, meta, 'styleUrls'), ...(styleUrl ? [styleUrl] : [])],
     imports: textArrayProp(ts, meta, 'imports'),
+    providers: textArrayProp(ts, meta, 'providers'),
+    viewProviders: textArrayProp(ts, meta, 'viewProviders'),
     hostDirectives: hostDirectiveSpecs.map((spec) => spec.name),
     extends: baseClass,
     implements: implementsOf(ts, node),

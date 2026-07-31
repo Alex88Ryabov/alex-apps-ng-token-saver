@@ -438,6 +438,79 @@ test('a field declared as an input in the decorator is not duplicated and keeps 
   );
 });
 
+test('providers are read as written, viewProviders too', () => {
+  const contract = one(`
+    @Component({
+      selector: 'a-b',
+      template: '',
+      providers: [LoginAnalyticsService, { provide: ANALYTICS, useClass: AuthAnalyticsService }],
+      viewProviders: [UserIdentityService],
+    })
+    export class C {}
+  `);
+  assert.deepEqual(contract.providers, [
+    'LoginAnalyticsService',
+    '{ provide: ANALYTICS, useClass: AuthAnalyticsService }',
+  ]);
+  assert.deepEqual(contract.viewProviders, ['UserIdentityService']);
+});
+
+test('ancestors: providers are never merged - Angular replaces, not merges', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'base.ts'),
+      `import { Directive } from '@angular/core';
+       @Directive({ providers: [BaseService] })
+       export class Base {}`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { Base } from './base';
+       @Component({ selector: 'a-b', template: '' })
+       export class C extends Base {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.providers, [], 'the ancestor providers must not leak in');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('host directives: their providers do not leak into the contract either', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ng-anc-'));
+  try {
+    await writeFile(
+      join(dir, 'analytics.directive.ts'),
+      `import { Directive, Input } from '@angular/core';
+       @Directive({ selector: '[appAnalytics]', providers: [AnalyticsService] })
+       export class AnalyticsDirective {
+         @Input() channel = '';
+       }`,
+    );
+    const file = join(dir, 'x.component.ts');
+    await writeFile(
+      file,
+      `import { Component } from '@angular/core';
+       import { AnalyticsDirective } from './analytics.directive';
+       @Component({
+         selector: 'a-b',
+         template: '',
+         hostDirectives: [{ directive: AnalyticsDirective, inputs: ['channel'] }],
+       })
+       export class C {}`,
+    );
+    const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
+    assert.deepEqual(complete.inputs.map((item) => item.name), ['channel']);
+    assert.deepEqual(complete.providers, [], 'the host directive providers must not leak in');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('styles are collected from both forms', () => {
   const contract = one(`
     @Component({ selector: 'a-b', template: '', styleUrls: ['./a.css'], styleUrl: './b.css' })
