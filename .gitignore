@@ -5,6 +5,10 @@ node_modules/
 # Build output
 dist/
 
+# Internal working documents — local only
+CLAUDE.md
+angular-mcp-brief.md
+
 # Local scratch
 .backup/
 *.log

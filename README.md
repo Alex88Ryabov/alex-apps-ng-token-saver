@@ -345,9 +345,6 @@ in milliseconds once the project's TypeScript is cached. A session idle for 15 m
 its language server down, and the next call pays the cold start again — see
 `NG_TOKEN_SAVER_IDLE_MS` above.
 
-`CLAUDE.md` and `angular-mcp-brief.md` in this repository are internal working documents in
-Russian: the full measurement log, every dead end, and the reasoning behind each decision.
-
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE). Copyright (C) 2026 Alex Ryabov.
