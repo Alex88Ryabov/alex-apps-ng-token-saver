@@ -28,6 +28,12 @@ Claude Code:
 claude mcp add ng-token-saver -- ng-token-saver
 ```
 
+Codex CLI:
+
+```
+codex mcp add ng-token-saver -- ng-token-saver
+```
+
 Any other MCP client:
 
 ```json
@@ -40,10 +46,16 @@ Or skip the install and let the client fetch it through npx:
 { "mcpServers": { "ng-token-saver": { "command": "npx", "args": ["-y", "@alex-apps/ng-token-saver"] } } }
 ```
 
-Both paths are verified by running: the packed tarball (79 kB, dist only) was installed into
-a clean prefix and all four tool kinds answered through a real MCP client, and the npx form
-connects in 1.2–2.0 s from a warm npm cache (the very first run on a machine also downloads
-the dependency tree — the language server alone unpacks to 13.6 MB).
+In Cursor that npx form is one click:
+
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=ng-token-saver&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBhbGV4LWFwcHMvbmctdG9rZW4tc2F2ZXIiXX0%3D)
+
+The npm and npx paths are verified by running: the packed tarball (79 kB, dist only) was
+installed into a clean prefix and all four tool kinds answered through a real MCP client,
+and the npx form connects in 1.2–2.0 s from a warm npm cache (the very first run on a
+machine also downloads the dependency tree — the language server alone unpacks to 13.6 MB).
+The Codex command and the Cursor button follow their vendors' documentation, like every
+client config in [Requirements and setup](#requirements-and-setup).
 
 A first question to ask it — the contract of a component whose members are scattered across
 an extends chain. Asked for `fixtures/v17/src/app/derived-card.component.ts` (a fixture in
@@ -322,8 +334,8 @@ The configs below are taken from each client's documentation, not from a run of 
 protocol compatibility itself is verified by the benches, which talk to the server through
 a real MCP client over stdio.
 
-**Cursor** — the same `mcpServers` JSON as in Quick start, in `~/.cursor/mcp.json`
-(all projects) or `.cursor/mcp.json` (one project).
+**Cursor** — the one-click button in Quick start, or the same `mcpServers` JSON as in
+Quick start, in `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project).
 
 **Windsurf** — the same JSON, in `~/.codeium/windsurf/mcp_config.json`.
 
@@ -334,7 +346,7 @@ takes a `type`:
 { "servers": { "ng-token-saver": { "type": "stdio", "command": "ng-token-saver" } } }
 ```
 
-**Codex CLI** — `~/.codex/config.toml`:
+**Codex CLI** — `codex mcp add ng-token-saver -- ng-token-saver`, or `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.ng-token-saver]
