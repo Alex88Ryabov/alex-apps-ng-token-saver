@@ -23,7 +23,4 @@ jobs:
       - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
-      - run: |
-          node --version && npm --version
-          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "OIDC env present"; else echo "OIDC env MISSING"; fi
-      - run: npm publish --loglevel http
+      - run: npm publish
