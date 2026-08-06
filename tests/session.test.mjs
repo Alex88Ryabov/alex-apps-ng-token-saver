@@ -66,7 +66,8 @@ test('the first diagnostics request waits for a push instead of returning emptin
   const client = fakeClient();
   const session = sessionWith(client);
   const list = await session.diagnosticsFor(template);
-  assert.equal(client.calls.waitedForNext, 1);
+  // Two waits: the template's own push, then one bounded wait for the companion's.
+  assert.equal(client.calls.waitedForNext, 2);
   assert.equal(list.length, 1);
 });
 
@@ -79,8 +80,71 @@ test('a file opened by another tool does not produce a false "no errors"', async
   assert.equal(client.hadDiagnosticsPush(template), false);
 
   const list = await session.diagnosticsFor(template);
-  assert.equal(client.calls.waitedForNext, 1, 'must wait for the push rather than return an empty list');
+  assert.equal(client.calls.waitedForNext, 2, 'must wait for the push rather than return an empty list');
   assert.equal(list.length, 1);
+});
+
+// The server republishes a companion-anchored entry under the template URI with the same
+// .ts range (measured on 22.0.8: a host-listener error came as line 69 of a 58-line
+// template). The verbatim twin gets a file field; the template's own entry stays bare.
+test('an entry the companion also carries is attributed to the companion', async () => {
+  const anchored = {
+    range: { start: { line: 11, character: 41 }, end: { line: 11, character: 47 } },
+    code: 2554,
+    message: 'Expected 0 arguments, but got 1.',
+  };
+  const own = {
+    range: { start: { line: 1, character: 5 }, end: { line: 1, character: 9 } },
+    code: 2339,
+    message: 'no such property',
+  };
+  const perDoc = new Map();
+  const client = fakeClient({
+    diagnosticsFor(path) {
+      return perDoc.get(path.endsWith('.ts') ? 'ts' : 'html');
+    },
+    async waitForNextDiagnostics() {
+      client.pushed.add(template);
+      perDoc.set('html', [anchored, own]);
+      perDoc.set('ts', [anchored]);
+      return true;
+    },
+  });
+  const session = sessionWith(client);
+  const list = await session.diagnosticsFor(template);
+  assert.equal(list.length, 2);
+  assert.equal(list.find((item) => item.code === 2554).file, template.replace(/\.html$/, '.ts'));
+  assert.equal(list.find((item) => item.code === 2339).file, undefined);
+});
+
+// The companion's push can lag behind the template's: attribution must wait for it once
+// rather than judge by an empty cache and silently drop the file field.
+test('a lagging companion push is waited for, not skipped', async () => {
+  const anchored = {
+    range: { start: { line: 11, character: 41 }, end: { line: 11, character: 47 } },
+    code: 2554,
+    message: 'Expected 0 arguments, but got 1.',
+  };
+  const perDoc = new Map();
+  const client = fakeClient({
+    diagnosticsFor(path) {
+      return perDoc.get(path.endsWith('.ts') ? 'ts' : 'html');
+    },
+    async waitForNextDiagnostics(path) {
+      client.calls.waitedForNext += 1;
+      if (path.endsWith('.ts')) {
+        perDoc.set('ts', [anchored]);
+      } else {
+        client.pushed.add(template);
+        perDoc.set('html', [anchored]);
+      }
+      return true;
+    },
+  });
+  const session = sessionWith(client);
+  const list = await session.diagnosticsFor(template);
+  assert.equal(client.calls.waitedForNext, 2);
+  assert.equal(list[0].file, template.replace(/\.html$/, '.ts'));
 });
 
 test('a repeat request with no edits does not wait for a push again', async () => {
@@ -88,7 +152,8 @@ test('a repeat request with no edits does not wait for a push again', async () =
   const session = sessionWith(client);
   await session.diagnosticsFor(template);
   await session.diagnosticsFor(template);
-  assert.equal(client.calls.waitedForNext, 1);
+  // The template short path answers from cache, and the companion wait happens only once.
+  assert.equal(client.calls.waitedForNext, 2);
 });
 
 test('the template is opened before its companion', async () => {

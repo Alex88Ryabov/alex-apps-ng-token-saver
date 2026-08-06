@@ -62,11 +62,15 @@ function resolveFile(input: string): string {
 }
 
 // Answers are dense JSON with no markdown: every extra character lands in the agent context.
-function failure(error: unknown): ToolResult {
+function errorBody(error: unknown): Record<string, unknown> {
   if (error instanceof WorkspaceError || error instanceof SessionError) {
-    return toolError({ error: error.message, hint: error.hint });
+    return { error: error.message, hint: error.hint };
   }
-  return toolError({ error: error instanceof Error ? error.message : String(error) });
+  return { error: error instanceof Error ? error.message : String(error) };
+}
+
+function failure(error: unknown): ToolResult {
+  return toolError(errorBody(error));
 }
 
 // MCP stdio shutdown is 'close stdin, wait for exit'. Exiting straight on EOF would drop
@@ -103,7 +107,11 @@ async function tracked(work: () => Promise<ToolResult>): Promise<ToolResult> {
   }
 }
 
-const server = new McpServer({ name: 'ng-token-saver', version: '0.1.3' });
+// The version rides along from package.json: the literal here went stale twice.
+const packageVersion = (
+  JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version: string }
+).version;
+const server = new McpServer({ name: 'ng-token-saver', version: packageVersion });
 
 server.registerTool(
   'ng_template_definition',
@@ -147,50 +155,92 @@ server.registerTool(
     }),
 );
 
+// One file's diagnostics answer; ok distinguishes a healthy answer from a broken server so
+// the single-file call can keep failing loudly while a batch reports per file.
+async function diagnoseFile(path: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+  const session = registry.acquire(path);
+  const list = await session.diagnosticsFor(path);
+  if (list.length === 0) {
+    // 'No errors' only means anything when the server is healthy.
+    const health = await session.healthNear(path);
+    if (health.state === 'broken') {
+      return { ok: false, body: { error: health.reason, hint: health.hint, ...session.serverNotices() } };
+    }
+    // And it means nothing at all when the compiler was told not to check templates.
+    // The server reports one notice per project; we attach the one this file belongs to.
+    const { strictTemplatesOff } = session.serverNotices();
+    const off = strictTemplatesOff.find((config) => belongsTo(path, projectDirOf(config)));
+    if (off) {
+      return {
+        ok: true,
+        body: {
+          diagnostics: [],
+          checksDisabled:
+            `strictTemplates is off in ${off}, so an empty list does not mean the template is correct`,
+        },
+      };
+    }
+  }
+  return {
+    ok: true,
+    body: {
+      diagnostics: list.map((item) => ({
+        // The server anchors some template-published entries in the companion .ts (a host
+        // listener error came as line 69 of a 58-line template); file appears only then.
+        ...(item.file !== undefined ? { file: item.file } : {}),
+        line: item.range.start.line + 1,
+        character: item.range.start.character + 1,
+        code: typeof item.code === 'number' ? `NG${item.code}` : (item.code ?? null),
+        severity: item.severity ?? 1,
+        message: item.message,
+      })),
+    },
+  };
+}
+
 server.registerTool(
   'ng_template_diagnostics',
   {
     title: 'Angular: template errors',
     description:
-      'Angular compiler errors for a template after an edit. Accepts .html or .ts. ' +
+      'Angular compiler errors for a template after an edit. Accepts .html or .ts; files checks ' +
+      'a batch. An entry anchored in the companion file names it in file. ' +
       'An empty list means "no errors" only when the server is healthy.',
     inputSchema: {
-      file: z.string().describe('Path to the template or to the component'),
+      file: z.string().optional().describe('Path to the template or to the component'),
+      files: z
+        .array(z.string())
+        .min(1)
+        .max(20)
+        .optional()
+        .describe('Batch of up to 20 templates; the answer groups diagnostics per file'),
     },
   },
-  async ({ file }) =>
+  async ({ file, files }) =>
     tracked(async () => {
       try {
-        const path = resolveFile(file);
-        const session = registry.acquire(path);
-        const list = await session.diagnosticsFor(path);
-        if (list.length === 0) {
-          // 'No errors' only means anything when the server is healthy.
-          const health = await session.healthNear(path);
-          if (health.state === 'broken') {
-            return toolError({ error: health.reason, hint: health.hint, ...session.serverNotices() });
-          }
-          // And it means nothing at all when the compiler was told not to check templates.
-          // The server reports one notice per project; we attach the one this file belongs to.
-          const { strictTemplatesOff } = session.serverNotices();
-          const off = strictTemplatesOff.find((config) => belongsTo(path, projectDirOf(config)));
-          if (off) {
-            return json({
-              diagnostics: [],
-              checksDisabled:
-                `strictTemplates is off in ${off}, so an empty list does not mean the template is correct`,
-            });
+        // Both set and both missing fail alike: exactly one input form per call.
+        if ((file === undefined) === (files === undefined)) {
+          return toolError({ error: 'pass exactly one of file or files' });
+        }
+        if (file !== undefined) {
+          const outcome = await diagnoseFile(resolveFile(file));
+          return outcome.ok ? json(outcome.body) : toolError(outcome.body);
+        }
+        const answers: Record<string, unknown>[] = [];
+        for (const raw of files ?? []) {
+          // The echo is the canonical path once the file resolves; only an entry that
+          // does not resolve echoes the caller's spelling.
+          let path = raw;
+          try {
+            path = resolveFile(raw);
+            const outcome = await diagnoseFile(path);
+            answers.push({ file: path, ...outcome.body });
+          } catch (error) {
+            answers.push({ file: path, ...errorBody(error) });
           }
         }
-        return json({
-          diagnostics: list.map((item) => ({
-            line: item.range.start.line + 1,
-            character: item.range.start.character + 1,
-            code: typeof item.code === 'number' ? `NG${item.code}` : (item.code ?? null),
-            severity: item.severity ?? 1,
-            message: item.message,
-          })),
-        });
+        return json({ files: answers });
       } catch (error) {
         return failure(error);
       }

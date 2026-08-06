@@ -63,4 +63,8 @@ for (const item of templates) {
   console.log(`    ${info.text.slice(0, 400)}`);
 }
 
+const batch = await call('ng_template_diagnostics', { files: templates.map((item) => resolve(item)) });
+console.log(`\n=== batch diagnostics over ${templates.length} file(s) (${batch.ms} ms)`);
+console.log(`  ${batch.text.slice(0, 240)}`);
+
 await client.close();

@@ -90,12 +90,12 @@ examples are in [Version facts](#version-facts).
 
 ## Tools
 
-Six tools, 921 characters of descriptions in total. Answers are dense JSON with no markdown.
+Six tools, 1001 characters of descriptions in total. Answers are dense JSON with no markdown.
 
 | Tool | What it answers | Needs the language server |
 |---|---|---|
 | `ng_template_definition` | where a symbol under this template position is declared | yes |
-| `ng_template_diagnostics` | Angular compiler errors for this template | yes |
+| `ng_template_diagnostics` | Angular compiler errors for a template, or for a `files` batch; an entry anchored in the companion `.ts` carries `file` | yes |
 | `ng_component_info` | the public contract of a component or directive | no |
 | `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
 | `ng_version_rules` | what exists and what does not in this project's Angular version | no |
@@ -317,7 +317,7 @@ Configuration, both variables optional:
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 162 unit tests (node:test, no dependencies)
+npm test                                  build plus 164 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:settle                      whether a pause after didOpen is needed (it is not)
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
@@ -337,7 +337,7 @@ The stand is `fixtures/v17..v22` — six real Angular workspaces, each with its 
 
 All six tools verified on the six fixtures and on two production codebases — 1298 and 407
 components, zero parse errors — plus one Angular 16 project to check that out-of-range
-refusals are structured rather than silent. 162 unit tests, all green.
+refusals are structured rather than silent. 164 unit tests, all green.
 
 Measured latency: the two LSP-backed tools pay 8–28 s of cold start on the first call and
 answer in 2–9 ms after it; the four static tools answer in 250–600 ms on the first call and

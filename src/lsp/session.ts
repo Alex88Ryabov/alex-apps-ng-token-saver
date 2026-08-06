@@ -76,6 +76,9 @@ export class NgSession {
   private lastOpenAt = 0;
   private readonly syncLock = new Mutex();
   private readonly loadedApps = new Set<string>();
+  // Companions we already waited a push for: a server that never pushes for the companion
+  // must not tax every later diagnostics call with the full timeout.
+  private readonly companionWaits = new Set<string>();
   private ready: Promise<void> | null = null;
   private health: Health = { state: 'warming' };
   private inFlight = 0;
@@ -228,11 +231,9 @@ export class NgSession {
   // .ts is not open yet (fix #2165). Opening the .ts first disables that path.
   private async syncPair(client: LspClient, path: string): Promise<void> {
     await this.sync(client, path, languageIdFor(path));
-    if (path.endsWith('.html')) {
-      const companion = path.replace(/\.html$/, '.ts');
-      if (existsSync(companion)) {
-        await this.sync(client, companion, 'typescript');
-      }
+    const companion = companionOf(path);
+    if (companion && existsSync(companion)) {
+      await this.sync(client, companion, 'typescript');
     }
   }
 
@@ -330,7 +331,7 @@ export class NgSession {
   }
 
   // A template and its companion .ts are checked together: template diagnostics need the class.
-  async diagnosticsFor(rawPath: string): Promise<Diagnostic[]> {
+  async diagnosticsFor(rawPath: string): Promise<AttributedDiagnostic[]> {
     return this.tracked(async () => {
       const path = canonical(rawPath);
       const client = await this.awaitClient();
@@ -340,12 +341,42 @@ export class NgSession {
       const changed = this.open.get(pathKey(path))?.version ?? 1;
       // Short path only if a push already arrived: another tool may have opened the file, and
       // then 'empty' means 'not computed yet', not 'no errors'.
-      if (wasOpen && changed === 1 && client.hadDiagnosticsPush(path)) {
-        return client.diagnosticsFor(path) ?? [];
+      if (!(wasOpen && changed === 1 && client.hadDiagnosticsPush(path))) {
+        await client.waitForNextDiagnostics(path, since, DIAGNOSTICS_TIMEOUT_MS);
       }
-      await client.waitForNextDiagnostics(path, since, DIAGNOSTICS_TIMEOUT_MS);
-      return client.diagnosticsFor(path) ?? [];
+      return this.attributeToCompanion(client, path, client.diagnosticsFor(path) ?? [], since);
     });
+  }
+
+  // The server republishes component-scope diagnostics under the template URI with spans that
+  // still point into the .ts (measured on 22.0.8, section 2.28): a host-listener error came
+  // as line 69 of a 58-line template. An entry the companion list carries verbatim is anchored
+  // in the companion, and the answer says so with a file field.
+  private async attributeToCompanion(
+    client: LspClient,
+    path: string,
+    list: Diagnostic[],
+    since: number,
+  ): Promise<AttributedDiagnostic[]> {
+    const companion = companionOf(path);
+    if (!companion || list.length === 0 || !existsSync(companion)) {
+      return list;
+    }
+    // The companion's own push can lag behind the template's; judging by an empty cache would
+    // silently skip the attribution, so wait for its first push the same bounded way — once.
+    const key = pathKey(companion);
+    if (!client.hadDiagnosticsPush(companion) && !this.companionWaits.has(key)) {
+      this.companionWaits.add(key);
+      await client.waitForNextDiagnostics(companion, since, DIAGNOSTICS_TIMEOUT_MS);
+    }
+    const twins = client.diagnosticsFor(companion) ?? [];
+    if (twins.length === 0) {
+      return list;
+    }
+    const anchored = new Set(twins.map(diagnosticKey));
+    return list.map((item) =>
+      anchored.has(diagnosticKey(item)) ? { ...item, file: companion } : item,
+    );
   }
 
   // The idle sweep must not kill a session mid-call: a cold project load takes two minutes.
@@ -411,6 +442,31 @@ export interface LocationHit {
   file: string;
   line: number;
   character: number;
+}
+
+// A diagnostic plus, when it is anchored in the pair's other document, that document's path.
+export interface AttributedDiagnostic extends Diagnostic {
+  file?: string;
+}
+
+// The template's pair; null for anything that is not a template path. Extension case is
+// folded: the registries already learned that lesson the hard way (CLAUDE.md, fact 18).
+function companionOf(path: string): string | null {
+  return /\.html$/i.test(path) ? path.replace(/\.html$/i, '.ts') : null;
+}
+
+// Identity of a server diagnostic across the two publishes of one pair. The end position is
+// read defensively: fakes in tests carry start-only ranges.
+function diagnosticKey(item: Diagnostic): string {
+  const { start, end } = item.range;
+  return [
+    item.code ?? '',
+    start.line,
+    start.character,
+    end?.line ?? '',
+    end?.character ?? '',
+    item.message,
+  ].join('|');
 }
 
 export interface RawLocation {
