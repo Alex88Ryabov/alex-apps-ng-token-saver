@@ -14,6 +14,54 @@ Everything below marked as measured was produced by running code against six rea
 workspaces (17.3.12, 18.2.14, 19.2.25, 20.3.26, 21.2.18, 22.0.8) and two production projects.
 Every number can be reproduced with the commands in [Reproducing the measurements](#reproducing-the-measurements).
 
+## Quick start
+
+The language server ships as a regular dependency — nothing to install besides the package:
+
+```
+npm install -g @alex-apps/ng-token-saver
+```
+
+Claude Code:
+
+```
+claude mcp add ng-token-saver -- ng-token-saver
+```
+
+Any other MCP client:
+
+```json
+{ "mcpServers": { "ng-token-saver": { "command": "ng-token-saver" } } }
+```
+
+Or skip the install and let the client fetch it through npx:
+
+```json
+{ "mcpServers": { "ng-token-saver": { "command": "npx", "args": ["-y", "@alex-apps/ng-token-saver"] } } }
+```
+
+Both paths are verified by running: the packed tarball (79 kB, dist only) was installed into
+a clean prefix and all four tool kinds answered through a real MCP client, and the npx form
+connects in 1.2–2.0 s from a warm npm cache (the very first run on a machine also downloads
+the dependency tree — the language server alone unpacks to 13.6 MB).
+
+A first question to ask it — the contract of a component whose members are scattered across
+an extends chain. Asked for `fixtures/v17/src/app/derived-card.component.ts` (a fixture in
+this repository), `ng_component_info` answers, verbatim:
+
+```json
+{"found":true,"angularVersion":"17.3.12","className":"DerivedCardComponent","kind":"component","selector":"app-derived-card","standalone":true,"inlineTemplate":true,"styleUrls":[],"imports":[],"hostDirectives":[],"extends":"BasePanel","ancestors":["BasePanel","BaseWidget"],"inputs":[{"name":"accent","type":"boolean"},{"name":"heading","type":"string"},{"name":"disabled","type":"boolean"}],"outputs":[{"name":"blurred","type":"void"}],"publicMembers":[{"name":"focus","kind":"method","signature":"focus(): void","noop":true},{"name":"collapse","kind":"method","signature":"collapse(animated: boolean): void","noop":true}]}
+```
+
+624 characters, 305 ms on the session's first call (it loads the project's own TypeScript),
+single-digit milliseconds after. The asked file declares one input and an `extends` clause;
+`heading`, `disabled`, the output and both methods live in `BasePanel` and `BaseWidget` and
+are resolved statically, and `"noop": true` on `focus()` is the subclass shadowing it with
+an empty body — the kind of fact that otherwise costs a whole file read per ancestor.
+
+Configs for Cursor, VS Code, Windsurf, Codex CLI and JetBrains, the Node floor, and running
+from source are in [Requirements and setup](#requirements-and-setup).
+
 ## The two problems it solves
 
 **1. No template awareness.** `grep` over an `.html` file cannot tell you where
@@ -250,20 +298,12 @@ selector can read as a false twin.
   Node 18/20 needs nothing changed; and if you prefer a newer runtime just for the server,
   point the client config at that binary explicitly: `"command": "C:\\node22\\node.exe"`.
 
-**From npm** — the language server ships as a regular dependency, nothing else to install:
-
-```
-npm install -g @alex-apps/ng-token-saver
-```
-
-After that every client config below shortens to `"command": "ng-token-saver"` with no args.
-The installed layout is verified by running: the packed tarball (79 kB, dist only) was
-installed into a clean prefix and all four tool kinds answered through a real MCP client.
-
-**From source:**
+**From source** (instead of npm):
 
 - The project's own dependencies: `npm install`, then `npm run build`.
 - The shipped language-server branch lives in `tools/servers/ls22` and needs `npm ci` there once.
+- In every client config, replace the `ng-token-saver` command with `node <path>/dist/index.js`;
+  for Claude Code: `claude mcp add ng-token-saver -- node <path>/dist/index.js`.
 
 `node_modules` folders are not committed, including the twelve inside the stand. To restore the
 full measurement environment:
@@ -274,41 +314,36 @@ cd tools/servers/ls22 && npm ci        # the branch actually shipped
 cd fixtures/v22 && npm ci              # repeat per fixture you want to run
 ```
 
-Registering the server with an MCP client:
-
-```json
-{
-  "mcpServers": {
-    "ng-token-saver": {
-      "command": "node",
-      "args": ["<path>/dist/index.js"]
-    }
-  }
-}
-```
-
-With Claude Code that is one command:
-
-```
-claude mcp add ng-token-saver -- node <path>/dist/index.js
-```
+### Clients
 
 The server is a plain stdio MCP server with no client-specific features, so any MCP client
-can launch it. Two more clients, with configs taken from their documentation (not from a run
-of ours — protocol compatibility itself is verified by the benches, which talk to the server
-through a real MCP client over stdio):
+can launch it; installation and Claude Code registration are in [Quick start](#quick-start).
+The configs below are taken from each client's documentation, not from a run of ours —
+protocol compatibility itself is verified by the benches, which talk to the server through
+a real MCP client over stdio.
+
+**Cursor** — the same `mcpServers` JSON as in Quick start, in `~/.cursor/mcp.json`
+(all projects) or `.cursor/mcp.json` (one project).
+
+**Windsurf** — the same JSON, in `~/.codeium/windsurf/mcp_config.json`.
+
+**VS Code (Copilot agent mode)** — `.vscode/mcp.json`; the key is `servers` and the entry
+takes a `type`:
+
+```json
+{ "servers": { "ng-token-saver": { "type": "stdio", "command": "ng-token-saver" } } }
+```
 
 **Codex CLI** — `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.ng-token-saver]
-command = "node"
-args = ["<path>/dist/index.js"]
+command = "ng-token-saver"
 ```
 
 **JetBrains AI Assistant / Junie** — Settings → Tools → AI Assistant → Model Context
-Protocol accepts the same JSON as above (the format deliberately mirrors Claude Desktop's);
-for Junie, additionally enable "Pass custom MCP servers".
+Protocol accepts the same JSON as Quick start's (the format deliberately mirrors Claude
+Desktop's); for Junie, additionally enable "Pass custom MCP servers".
 
 Configuration, both variables optional:
 
