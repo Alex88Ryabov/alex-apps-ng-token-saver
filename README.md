@@ -54,8 +54,6 @@ The npm and npx paths are verified by running: the packed tarball (79 kB, dist o
 installed into a clean prefix and all four tool kinds answered through a real MCP client,
 and the npx form connects in 1.2–2.0 s from a warm npm cache (the very first run on a
 machine also downloads the dependency tree — the language server alone unpacks to 13.6 MB).
-The Codex command and the Cursor button follow their vendors' documentation, like every
-client config in [Requirements and setup](#requirements-and-setup).
 
 A first question to ask it — the contract of a component whose members are scattered across
 an extends chain. Asked for `fixtures/v17/src/app/derived-card.component.ts` (a fixture in
