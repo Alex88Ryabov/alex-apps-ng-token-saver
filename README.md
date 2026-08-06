@@ -328,9 +328,6 @@ cd fixtures/v22 && npm ci              # repeat per fixture you want to run
 
 The server is a plain stdio MCP server with no client-specific features, so any MCP client
 can launch it; installation and Claude Code registration are in [Quick start](#quick-start).
-The configs below are taken from each client's documentation, not from a run of ours —
-protocol compatibility itself is verified by the benches, which talk to the server through
-a real MCP client over stdio.
 
 **Cursor** — the one-click button in Quick start, or the same `mcpServers` JSON as in
 Quick start, in `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project).
