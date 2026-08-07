@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Alex88Ryabov/ng-token-saver",
+  "title": "Angular token saver",
+  "description": "Compiler-backed Angular template answers, component contracts and version facts for AI agents",
+  "version": "0.1.7",
+  "websiteUrl": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver#readme",
+  "repository": {
+    "url": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver",
+    "source": "github",
+    "id": "1325202820"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@alex-apps/ng-token-saver",
+      "version": "0.1.7",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NG_TOKEN_SAVER_IDLE_MS",
+          "description": "Idle milliseconds before a language server session shuts down; 0 disables the shutdown. Default 900000.",
+          "format": "number",
+          "isRequired": false
+        },
+        {
+          "name": "NG_TOKEN_SAVER_TRACE",
+          "description": "Path to a file to append raw LSP traffic to, for debugging.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
