@@ -23,4 +23,29 @@ jobs:
       - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
+      # the registry rejects a version it already has, so catch a stale
+      # server.json before the npm release makes the tag unrepeatable
+      - name: versions agree with the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag=${GITHUB_REF#refs/tags/v}
+          test "$(jq -r .version package.json)" = "$tag"
+          test "$(jq -r .version server.json)" = "$tag"
+          test "$(jq -r '.packages[0].version' server.json)" = "$tag"
+          test "$(jq -r .mcpName package.json)" = "$(jq -r .name server.json)"
       - run: npm publish
+
+  # a separate job so a registry failure can be re-run alone: npm rejects
+  # a second publish of the same version, and re-running this whole file
+  # would die there before ever reaching the registry
+  registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      # the same id-token permission npm uses; no stored credential
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
