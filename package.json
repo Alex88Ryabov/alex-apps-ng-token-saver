@@ -47,7 +47,8 @@
     "bench:contract": "node tools/bench-contract.mjs",
     "bench:diagnose": "node tools/bench-diagnose.mjs",
     "bench:rename": "node tools/bench-rename.mjs",
-    "bench:api": "node tools/probe-api.mjs"
+    "bench:api": "node tools/probe-api.mjs",
+    "bench:defaults": "node tools/probe-defaults.mjs"
   },
   "dependencies": {
     "@angular/language-server": "22.0.8",

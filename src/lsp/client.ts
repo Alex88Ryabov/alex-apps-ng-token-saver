@@ -101,7 +101,7 @@ export class LspClient {
   private readonly startedAt = Date.now();
   /** Server notices about projects: why the language service is off, and where. */
   readonly notices: string[] = [];
-  /** Every tsconfig the server reported strictTemplates off for; a monorepo can have several. */
+  /** Every tsconfig the server suggested strict mode for: the flag is not written true there. */
   readonly strictTemplatesOff: string[] = [];
   private exitCode: number | null = null;
   private readonly stderrChunks: string[] = [];

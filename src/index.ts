@@ -17,15 +17,8 @@ import {
   pickComponent,
   resolveAncestors,
 } from './component-info.js';
-import {
-  belongsTo,
-  compact,
-  json,
-  kindFromSignature,
-  projectDirOf,
-  toolError,
-  type ToolResult,
-} from './format.js';
+import { diagnoseFile } from './diagnostics.js';
+import { compact, json, kindFromSignature, toolError, type ToolResult } from './format.js';
 import { SessionRegistry } from './lsp/registry.js';
 import { NgSession, SessionError } from './lsp/session.js';
 import { locateProject, WorkspaceError } from './lsp/workspace.js';
@@ -155,49 +148,6 @@ server.registerTool(
     }),
 );
 
-// One file's diagnostics answer; ok distinguishes a healthy answer from a broken server so
-// the single-file call can keep failing loudly while a batch reports per file.
-async function diagnoseFile(path: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
-  const session = registry.acquire(path);
-  const list = await session.diagnosticsFor(path);
-  if (list.length === 0) {
-    // 'No errors' only means anything when the server is healthy.
-    const health = await session.healthNear(path);
-    if (health.state === 'broken') {
-      return { ok: false, body: { error: health.reason, hint: health.hint, ...session.serverNotices() } };
-    }
-    // And it means nothing at all when the compiler was told not to check templates.
-    // The server reports one notice per project; we attach the one this file belongs to.
-    const { strictTemplatesOff } = session.serverNotices();
-    const off = strictTemplatesOff.find((config) => belongsTo(path, projectDirOf(config)));
-    if (off) {
-      return {
-        ok: true,
-        body: {
-          diagnostics: [],
-          checksDisabled:
-            `strictTemplates is off in ${off}, so an empty list does not mean the template is correct`,
-        },
-      };
-    }
-  }
-  return {
-    ok: true,
-    body: {
-      diagnostics: list.map((item) => ({
-        // The server anchors some template-published entries in the companion .ts (a host
-        // listener error came as line 69 of a 58-line template); file appears only then.
-        ...(item.file !== undefined ? { file: item.file } : {}),
-        line: item.range.start.line + 1,
-        character: item.range.start.character + 1,
-        code: typeof item.code === 'number' ? `NG${item.code}` : (item.code ?? null),
-        severity: item.severity ?? 1,
-        message: item.message,
-      })),
-    },
-  };
-}
-
 server.registerTool(
   'ng_template_diagnostics',
   {
@@ -224,7 +174,8 @@ server.registerTool(
           return toolError({ error: 'pass exactly one of file or files' });
         }
         if (file !== undefined) {
-          const outcome = await diagnoseFile(resolveFile(file));
+          const path = resolveFile(file);
+          const outcome = await diagnoseFile(registry.acquire(path), path);
           return outcome.ok ? json(outcome.body) : toolError(outcome.body);
         }
         const answers: Record<string, unknown>[] = [];
@@ -234,7 +185,7 @@ server.registerTool(
           let path = raw;
           try {
             path = resolveFile(raw);
-            const outcome = await diagnoseFile(path);
+            const outcome = await diagnoseFile(registry.acquire(path), path);
             answers.push({ file: path, ...outcome.body });
           } catch (error) {
             answers.push({ file: path, ...errorBody(error) });

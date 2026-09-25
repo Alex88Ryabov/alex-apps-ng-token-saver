@@ -64,8 +64,12 @@ function asString(value: unknown): string | null {
 }
 
 // strictTemplates is inherited through extends, so we walk the chain up to the first config that
-// sets it. If nobody sets it, Angular's default is false.
-function strictTemplatesOf(ts: TypeScriptApi, tsconfig: string, depth = 0): boolean | null {
+// sets it. undefined: nobody writes it; null: the chain cannot be followed.
+export function writtenStrictTemplates(
+  ts: TypeScriptApi,
+  tsconfig: string,
+  depth = 0,
+): boolean | null | undefined {
   if (depth > 8) {
     return null;
   }
@@ -85,14 +89,21 @@ function strictTemplatesOf(ts: TypeScriptApi, tsconfig: string, depth = 0): bool
   }
   const parent = asString(inherits);
   if (!parent) {
-    return false;
+    return undefined;
   }
   // A package in extends (no leading ./) cannot be resolved here, so we say 'unknown'.
   if (!parent.startsWith('.')) {
     return null;
   }
   const resolved = resolve(dirname(tsconfig), parent.endsWith('.json') ? parent : `${parent}.json`);
-  return strictTemplatesOf(ts, resolved, depth + 1);
+  return writtenStrictTemplates(ts, resolved, depth + 1);
+}
+
+// Unwritten means the compiler default, and that flipped on v22: off through v21, on from v22
+// (bench:defaults --only=4, every fixture's own ngc).
+function strictTemplatesOf(ts: TypeScriptApi, tsconfig: string, major: number): boolean | null {
+  const written = writtenStrictTemplates(ts, tsconfig);
+  return written === undefined ? major >= 22 : written;
 }
 
 function zoneJsOf(root: string, build: Record<string, unknown> | null): boolean | null {
@@ -125,6 +136,7 @@ function importsZoneJs(file: string): boolean | null {
 function entryOf(
   ts: TypeScriptApi,
   root: string,
+  major: number,
   name: string,
   definition: Record<string, unknown>,
 ): ProjectEntry {
@@ -141,12 +153,12 @@ function entryOf(
     root: projectRoot,
     sourceRoot: asString(definition['sourceRoot']),
     tsConfig,
-    strictTemplates: absolute ? strictTemplatesOf(ts, absolute) : null,
+    strictTemplates: absolute ? strictTemplatesOf(ts, absolute, major) : null,
     zoneJs: zoneJsOf(root, options),
   };
 }
 
-function fromAngularJson(ts: TypeScriptApi, root: string): ProjectEntry[] | null {
+function fromAngularJson(ts: TypeScriptApi, root: string, major: number): ProjectEntry[] | null {
   const config = readJsonc(ts, join(root, 'angular.json'));
   const projects = asRecord(config?.['projects']);
   if (!projects) {
@@ -154,7 +166,7 @@ function fromAngularJson(ts: TypeScriptApi, root: string): ProjectEntry[] | null
   }
   return Object.entries(projects).flatMap(([name, definition]) => {
     const record = asRecord(definition);
-    return record ? [entryOf(ts, root, name, record)] : [];
+    return record ? [entryOf(ts, root, major, name, record)] : [];
   });
 }
 
@@ -195,7 +207,7 @@ function findProjectFiles(root: string, depth: number, scan: Scan): void {
   }
 }
 
-function fromNx(ts: TypeScriptApi, root: string, scan: Scan): ProjectEntry[] | null {
+function fromNx(ts: TypeScriptApi, root: string, major: number, scan: Scan): ProjectEntry[] | null {
   if (!existsSync(join(root, 'nx.json'))) {
     return null;
   }
@@ -207,12 +219,12 @@ function fromNx(ts: TypeScriptApi, root: string, scan: Scan): ProjectEntry[] | n
     }
     const folder = relative(root, dirname(file)).replace(/\\/g, '/');
     const name = asString(config['name']) ?? folder;
-    return [entryOf(ts, root, name, { root: folder, ...config })];
+    return [entryOf(ts, root, major, name, { root: folder, ...config })];
   });
 }
 
 // Neither angular.json nor nx.json, so tsconfigs are all that is left. That is the stand, and
-function fromTsconfigs(ts: TypeScriptApi, root: string, scan: Scan): ProjectEntry[] {
+function fromTsconfigs(ts: TypeScriptApi, root: string, major: number, scan: Scan): ProjectEntry[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
     if (found.length >= 100) {
@@ -249,7 +261,7 @@ function fromTsconfigs(ts: TypeScriptApi, root: string, scan: Scan): ProjectEntr
       root: folder,
       sourceRoot: null,
       tsConfig: relative(root, file).replace(/\\/g, '/'),
-      strictTemplates: strictTemplatesOf(ts, file),
+      strictTemplates: strictTemplatesOf(ts, file, major),
       zoneJs: null,
     };
   });
@@ -272,14 +284,15 @@ export function describeWorkspaceMap(
   root: string,
   angularVersion: string,
 ): WorkspaceMap {
+  const major = Number(angularVersion.split('.')[0]);
   // An empty list from Nx means 'nx.json exists but no project.json' - that is how package-based
   // repositories and Nx on top of a plain CLI workspace look. Treating that as the final answer
   // would report zero projects for a perfectly alive workspace.
   const scan: Scan = { files: [], truncated: false };
-  const nx = fromNx(ts, root, scan);
+  const nx = fromNx(ts, root, major, scan);
   const found = nx && nx.length > 0 ? nx : null;
-  const cli = found ? null : fromAngularJson(ts, root);
-  const projects = found ?? cli ?? fromTsconfigs(ts, root, scan);
+  const cli = found ? null : fromAngularJson(ts, root, major);
+  const projects = found ?? cli ?? fromTsconfigs(ts, root, major, scan);
   return {
     root,
     kind: found ? 'nx' : cli ? 'angular-cli' : 'tsconfig-only',

@@ -34,7 +34,7 @@ test('the *ngIf deprecation is called a hint, not an error, and only from v20', 
   const v19 = versionRules('19.2.25', 19).antiPatterns.filter((item) => item.wrong.includes('*ngIf'));
   assert.deepEqual(v19, []);
   const v22 = versionRules('22.0.8', 22).antiPatterns.find((item) => item.wrong.includes('*ngIf'));
-  assert.match(v22.since, /deprecated since v20.*still work.*NG6385/);
+  assert.match(v22.since, /deprecated since v20.*still work.*TS6385/);
 });
 
 test('a minor below the measured one is flagged: the measurement does not cover the whole major', () => {

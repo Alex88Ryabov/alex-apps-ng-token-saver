@@ -153,12 +153,12 @@ export function versionRules(angularVersion: string, major: number, topic?: Topi
     since: `available from v${fact.from}${fact.until ? ` through v${fact.until}` : ''}`,
   }));
 
-  // Measured on 20.3.26, 21.2.18 and 22.0.8: all three report hint NG6385, not an error.
+  // Measured on 20.3.26, 21.2.18 and 22.0.8: all three report hint TS6385, not an error.
   if (major >= 20 && (!topic || topic === 'control-flow')) {
     antiPatterns.push({
       wrong: '*ngIf / *ngFor',
       right: '@if / @for',
-      since: `deprecated since v20; on ${MEASURED_AT[major]} they still work and report hint NG6385, not an error`,
+      since: `deprecated since v20; on ${MEASURED_AT[major]} they still work and report hint TS6385, not an error`,
     });
   }
   if (major < 19 && (!topic || topic === 'components')) {

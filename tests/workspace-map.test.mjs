@@ -88,8 +88,26 @@ test('Nx: projects are collected from project.json files, not from a single file
       ['ui', 'library', 'libs/ui'],
     ].sort(),
   );
-  // Nobody in the chain set strictTemplates, and Angular's default is false, not 'unknown'.
+  // Nobody in the chain set strictTemplates, and on v19 the compiler default is off, not 'unknown'.
   assert.equal(found.projects.find((item) => item.name === 'app-2').strictTemplates, false);
+  await rm(root, { recursive: true, force: true });
+});
+
+// Measured with every fixture's own ngc (bench:defaults --only=4): off through v21, on from v22.
+test('an unwritten strictTemplates follows the default of the major, which flipped on v22', async () => {
+  const root = await workspace({
+    'angular.json': {
+      projects: {
+        app: { projectType: 'application', root: '', architect: { build: { options: { tsConfig: 'tsconfig.app.json' } } } },
+      },
+    },
+    'tsconfig.app.json': { extends: './tsconfig.json' },
+    'tsconfig.json': { compilerOptions: { strict: true } },
+  });
+  const strictOn = (version) => describeWorkspaceMap(ts, root, version).projects[0].strictTemplates;
+  assert.equal(strictOn('17.3.12'), false);
+  assert.equal(strictOn('21.2.18'), false);
+  assert.equal(strictOn('22.0.8'), true);
   await rm(root, { recursive: true, force: true });
 });
 
