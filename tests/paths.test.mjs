@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { pathKey } from '../dist/lsp/client.js';
 import { resolve } from 'node:path';
-import { belongsTo, compact, kindFromSignature, projectDirOf } from '../dist/format.js';
+import { belongsTo, compact, kindFromSignature, projectDirOf, symbolCharacter } from '../dist/format.js';
 
 const windows = process.platform === 'win32';
 
@@ -81,4 +81,17 @@ test('a tsconfig path from the server maps onto workspace files', { skip: !windo
   const project = projectDirOf(reported);
   assert.equal(belongsTo(resolve('D:/dev/repo/apps/shop/src/a.component.html'), project), true);
   assert.equal(belongsTo(resolve('D:/dev/repo/apps/admin/src/a.component.html'), project), false);
+});
+
+test('symbolCharacter points into the symbol, not into a longer name that contains it', () => {
+  const line = '<app-user-card [user]="user" (saved)="onSaved(userName)"></app-user-card>';
+  // 'user' first occurs whole inside the brackets, not in app-user-card or userName.
+  assert.equal(symbolCharacter(line, 'user'), line.indexOf('[user]') + 1 + 2);
+  assert.equal(symbolCharacter(line, 'userName'), line.indexOf('userName') + 4);
+  assert.equal(symbolCharacter(line, 'app-user-card'), 1 + 6);
+  assert.equal(symbolCharacter(line, 'name'), null);
+});
+
+test('symbolCharacter takes a symbol with brackets as written', () => {
+  assert.equal(symbolCharacter('<div [appDrag]="x">', '[appDrag]'), 5 + 4);
 });

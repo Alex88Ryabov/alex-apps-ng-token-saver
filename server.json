@@ -3,7 +3,7 @@
   "name": "io.github.Alex88Ryabov/ng-token-saver",
   "title": "Angular token saver",
   "description": "Compiler-backed Angular template answers, component contracts and version facts for AI agents",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "websiteUrl": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver#readme",
   "repository": {
     "url": "https://github.com/Alex88Ryabov/alex-apps-ng-token-saver",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "@alex-apps/ng-token-saver",
-      "version": "0.1.7",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -24,6 +24,12 @@
           "name": "NG_TOKEN_SAVER_IDLE_MS",
           "description": "Idle milliseconds before a language server session shuts down; 0 disables the shutdown. Default 900000.",
           "format": "number",
+          "isRequired": false
+        },
+        {
+          "name": "NG_TOKEN_SAVER_PREWARM",
+          "description": "1 lets ng_workspace_map with a path inside an app load that app into the language server in the background. Costs ~1 GB of memory until the idle shutdown.",
+          "format": "string",
           "isRequired": false
         },
         {

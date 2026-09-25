@@ -65,10 +65,11 @@ for (const item of templates) {
     console.log('  no interpolations, skipping');
     continue;
   }
+  // The agent's view of the position: the line as Read numbers it, the symbol by name.
   const definition = await call('ng_template_definition', {
     file,
-    line: target.line,
-    character: target.character,
+    line: target.line + 1,
+    symbol: target.name,
   });
   console.log(`  {{ ${target.name} }} (${definition.ms} ms, ${definition.text.length} chars)`);
   console.log(`    ${definition.text.slice(0, 240)}`);

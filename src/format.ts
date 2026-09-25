@@ -62,6 +62,15 @@ export function kindFromSignature(signature: string | null): string {
   return match?.[1] ?? 'unknown';
 }
 
+// Where a symbol sits on a template line, so the agent names what it sees instead of counting
+// characters. Dashes count as part of a word: 'user' must not match inside 'app-user-card'.
+// Returns the 0-based character in the middle of the first match, or null.
+export function symbolCharacter(line: string, symbol: string): number | null {
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`(?<![\\w$-])${escaped}(?![\\w$-])`).exec(line);
+  return match ? match.index + Math.floor(symbol.length / 2) : null;
+}
+
 // The language server reports a tsconfig path in its own shape: lowercase drive letter and
 // forward slashes. resolve() brings it back to platform separators so paths compare equal.
 export function projectDirOf(configFilePath: string): string {

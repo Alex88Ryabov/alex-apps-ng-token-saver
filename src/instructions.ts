@@ -15,7 +15,8 @@ const GUIDANCE =
   'ng_version_rules before suggesting an Angular API; ng_workspace_map once for projects, ' +
   'versions and strictTemplates. The first diagnostics or definition call in a workspace loads ' +
   'the project into the Angular language server and takes up to a minute on a large workspace; ' +
-  'later calls take milliseconds, so a slow first answer is not a hang.';
+  'later calls take milliseconds, so a slow first answer is not a hang. Lines and characters ' +
+  'are 1-based everywhere, as Read shows them.';
 
 const PREWARM_NOTE =
   ' ng_workspace_map with a path inside an app also starts loading that app in the background.';

@@ -90,11 +90,11 @@ examples are in [Version facts](#version-facts).
 
 ## Tools
 
-Six tools, 1001 characters of descriptions in total. Answers are dense JSON with no markdown.
+Six tools, 1040 characters of descriptions in total. Answers are dense JSON with no markdown.
 
 | Tool | What it answers | Needs the language server |
 |---|---|---|
-| `ng_template_definition` | where a symbol under this template position is declared | yes |
+| `ng_template_definition` | where a symbol on a template line is declared — the line as Read shows it, the symbol by name | yes |
 | `ng_template_diagnostics` | Angular compiler errors for a template, or for a `files` batch; an entry anchored in the companion `.ts` carries `file` | yes |
 | `ng_component_info` | the public contract of a component or directive | no |
 | `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
@@ -103,6 +103,11 @@ Six tools, 1001 characters of descriptions in total. Answers are dense JSON with
 
 Four of the six never start the language server, so they answer in milliseconds and keep
 working on workspaces where the server refuses to load.
+
+Since 0.2.0 every position is 1-based, as Read shows it: `ng_template_definition` takes the
+line that way and the symbol by name (`character` is an alternative for a name that repeats on
+the line). 0.1.x took a 0-based `line` and `character`, the LSP convention — the same numbers
+now point one line lower.
 
 ## Measured: contract instead of the whole file
 
@@ -338,7 +343,8 @@ search. For a client that ignores `instructions`, the same text goes into `CLAUD
 > before suggesting an Angular API; ng_workspace_map once for projects, versions and
 > strictTemplates. The first diagnostics or definition call in a workspace loads the project
 > into the Angular language server and takes up to a minute on a large workspace; later calls
-> take milliseconds, so a slow first answer is not a hang.
+> take milliseconds, so a slow first answer is not a hang. Lines and characters are 1-based
+> everywhere, as Read shows them.
 
 ## Reproducing the measurements
 

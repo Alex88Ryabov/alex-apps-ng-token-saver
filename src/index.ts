@@ -19,11 +19,11 @@ import {
 } from './component-info.js';
 import { diagnoseFile } from './diagnostics.js';
 import { instructionsFor } from './instructions.js';
-import { compact, json, kindFromSignature, toolError, type ToolResult } from './format.js';
+import { compact, json, kindFromSignature, symbolCharacter, toolError, type ToolResult } from './format.js';
 import { SessionRegistry } from './lsp/registry.js';
 import { NgSession, SessionError } from './lsp/session.js';
 import { findCanaryTemplates, locateProject, WorkspaceError } from './lsp/workspace.js';
-import { findUsages, targetFromSelector, targetOf } from './find-usages.js';
+import { CONTEXT_LIMIT, findUsages, targetFromSelector, targetOf } from './find-usages.js';
 import { versionRules } from './version-rules.js';
 import { describeWorkspaceMap, pointsIntoOneProject, type WorkspaceMap } from './workspace-map.js';
 
@@ -131,20 +131,43 @@ server.registerTool(
   {
     title: 'Angular: declaration of a template symbol',
     description:
-      'From a position in an Angular template (.html or inline in .ts) to its TypeScript declaration. ' +
-      'line and character are 0-based, as in LSP.',
+      'From a symbol in an Angular template (.html or inline in .ts) to its TypeScript declaration. ' +
+      'line is 1-based, as Read shows it; name the symbol rather than counting its column.',
     inputSchema: {
       file: z.string().describe('Path to the template: .html, or .ts with an inline template'),
-      line: z.number().int().min(0),
-      character: z.number().int().min(0),
+      line: z.number().int().min(1),
+      symbol: z.string().optional().describe('The name on that line: userName, app-user-card, date'),
+      character: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('1-based column instead of symbol, when the name repeats on the line'),
     },
   },
-  async ({ file, line, character }) =>
+  async ({ file, line, symbol, character }) =>
     tracked(async () => {
       try {
+        if ((symbol === undefined) === (character === undefined)) {
+          return toolError({ error: 'pass exactly one of symbol or character' });
+        }
         const path = resolveFile(file);
+        const text = readFileSync(path, 'utf8').split(/\r?\n/)[line - 1];
+        if (text === undefined) {
+          return toolError({ error: `line ${line} is past the end of ${path}` });
+        }
+        // A name missing from the line is said with the line itself: an off-by-one then shows
+        // at once instead of resolving whatever sits on the neighbouring line.
+        const column = symbol !== undefined ? symbolCharacter(text, symbol) : character! - 1;
+        if (column === null) {
+          return toolError({
+            error: `${symbol} is not on line ${line}`,
+            line: text.trim().slice(0, CONTEXT_LIMIT),
+          });
+        }
+        const position = { line: line - 1, character: column };
         const session = registry.acquire(path);
-        const [hit] = await session.definitionAt(path, { line, character });
+        const [hit] = await session.definitionAt(path, position);
         if (!hit) {
           // An empty answer is indistinguishable from a failure, so we check with a canary.
           const health = await session.healthNear(path);
@@ -153,7 +176,7 @@ server.registerTool(
           }
           return json({ found: false });
         }
-        const signature = await session.hoverAt(path, { line, character });
+        const signature = await session.hoverAt(path, position);
         return json({
           found: true,
           file: hit.file,

@@ -30,7 +30,7 @@ export interface Usage {
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.angular', '.nx', 'coverage', 'out-tsc', 'tmp']);
-const CONTEXT_LIMIT = 120;
+export const CONTEXT_LIMIT = 120;
 // Presentation cap for the twin-declaration note, chosen by eye, not measured; the count
 // stays honest via 'and N more'.
 const TWIN_LIST_LIMIT = 5;
