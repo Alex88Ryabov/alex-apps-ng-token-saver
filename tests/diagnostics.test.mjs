@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { loadTypeScript } from '../dist/component-info.js';
-import { checksDisabledNote, diagnosticCode } from '../dist/diagnostics.js';
+import { checksDisabledNote, diagnosticCode, groupRepeats } from '../dist/diagnostics.js';
 
 const ts = await loadTypeScript(resolve('fixtures/v22'));
 
@@ -65,4 +65,24 @@ test('a notice about another project does not attach to this file', async () => 
   const { root, suggested } = await project({ angularCompilerOptions: { strictTemplates: false } });
   assert.equal(checksDisabledNote(ts, join(tmpdir(), 'elsewhere', 'a.component.html'), suggested), null);
   await rm(root, { recursive: true, force: true });
+});
+
+test('one message on many lines comes once with its lines; a single one keeps its column', () => {
+  const hint = (line, message) => ({ line, character: 5, code: 'TS6385', severity: 4, message });
+  const grouped = groupRepeats([
+    hint(1, "'ngIf' is deprecated."),
+    { line: 2, character: 9, code: 'TS2339', severity: 1, message: 'no such property' },
+    hint(3, "'ngIf' is deprecated."),
+    hint(4, "'ngForOf' is deprecated."),
+  ]);
+  assert.deepEqual(grouped, [
+    { lines: [1, 3], code: 'TS6385', severity: 4, message: "'ngIf' is deprecated." },
+    { line: 2, character: 9, code: 'TS2339', severity: 1, message: 'no such property' },
+    hint(4, "'ngForOf' is deprecated."),
+  ]);
+});
+
+test('entries anchored in the companion are not merged with the template ones', () => {
+  const entry = (file) => ({ ...(file ? { file } : {}), line: 1, character: 1, code: 'TS2554', severity: 1, message: 'm' });
+  assert.equal(groupRepeats([entry(), entry('a.component.ts')]).length, 2);
 });

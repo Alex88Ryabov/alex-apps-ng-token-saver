@@ -17,6 +17,51 @@ export interface FileDiagnostics {
   body: Record<string, unknown>;
 }
 
+export interface DiagnosticEntry {
+  file?: string;
+  line: number;
+  character: number;
+  code: string | null;
+  severity: number;
+  message: string;
+}
+
+export interface RepeatedEntry {
+  file?: string;
+  lines: number[];
+  code: string | null;
+  severity: number;
+  message: string;
+}
+
+// One message on many lines comes as one entry: a v22 probe with 36 *ngIf and 12 *ngFor gave
+// 48 hints and 4342 chars. The message names the symbol, so a repeat keeps only the lines;
+// a line listed twice means two occurrences on it.
+export function groupRepeats(entries: DiagnosticEntry[]): Array<DiagnosticEntry | RepeatedEntry> {
+  const groups = new Map<string, { entry: DiagnosticEntry; lines: number[] }>();
+  for (const entry of entries) {
+    const key = [entry.file ?? '', entry.code ?? '', entry.severity, entry.message].join('|');
+    const known = groups.get(key);
+    if (known) {
+      known.lines.push(entry.line);
+    } else {
+      groups.set(key, { entry, lines: [entry.line] });
+    }
+  }
+  return [...groups.values()].map(({ entry, lines }) => {
+    if (lines.length === 1) {
+      return entry;
+    }
+    return {
+      ...(entry.file !== undefined ? { file: entry.file } : {}),
+      lines,
+      code: entry.code,
+      severity: entry.severity,
+      message: entry.message,
+    };
+  });
+}
+
 // The language service sends Angular's own codes as -99 followed by the code (ngErrorCode in
 // its bundle), and TypeScript's as they are. Checked against ngc on v17: NG2010, TS2339.
 export function diagnosticCode(code: string | number | undefined): string | null {
@@ -69,19 +114,15 @@ export async function diagnoseFile(session: NgSession, path: string): Promise<Fi
       }
     }
   }
-  return {
-    ok: true,
-    body: {
-      diagnostics: list.map((item) => ({
-        // The server anchors some template-published entries in the companion .ts (a host
-        // listener error came as line 69 of a 58-line template); file appears only then.
-        ...(item.file !== undefined ? { file: item.file } : {}),
-        line: item.range.start.line + 1,
-        character: item.range.start.character + 1,
-        code: diagnosticCode(item.code),
-        severity: item.severity ?? 1,
-        message: item.message,
-      })),
-    },
-  };
+  const entries = list.map((item) => ({
+    // The server anchors some template-published entries in the companion .ts (a host
+    // listener error came as line 69 of a 58-line template); file appears only then.
+    ...(item.file !== undefined ? { file: item.file } : {}),
+    line: item.range.start.line + 1,
+    character: item.range.start.character + 1,
+    code: diagnosticCode(item.code),
+    severity: item.severity ?? 1,
+    message: item.message,
+  }));
+  return { ok: true, body: { diagnostics: groupRepeats(entries) } };
 }

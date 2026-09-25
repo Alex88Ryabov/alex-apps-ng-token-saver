@@ -65,14 +65,16 @@ an extends chain. Asked for `fixtures/v17/src/app/derived-card.component.ts` (a 
 this repository), `ng_component_info` answers, verbatim:
 
 ```json
-{"found":true,"angularVersion":"17.3.12","className":"DerivedCardComponent","kind":"component","selector":"app-derived-card","standalone":true,"inlineTemplate":true,"styleUrls":[],"imports":[],"hostDirectives":[],"extends":"BasePanel","ancestors":["BasePanel","BaseWidget"],"inputs":[{"name":"accent","type":"boolean"},{"name":"heading","type":"string"},{"name":"disabled","type":"boolean"}],"outputs":[{"name":"blurred","type":"void"}],"publicMembers":[{"name":"focus","kind":"method","signature":"focus(): void","noop":true},{"name":"collapse","kind":"method","signature":"collapse(animated: boolean): void","noop":true}]}
+{"found":true,"angularVersion":"17.3.12","className":"DerivedCardComponent","kind":"component","selector":"app-derived-card","standalone":true,"inlineTemplate":true,"styleUrls":[],"imports":[],"hostDirectives":[],"extends":"BasePanel","ancestors":[{"name":"BasePanel","file":"<repo>\\fixtures\\v17\\src\\app\\base-panel.ts"},{"name":"BaseWidget","file":"<repo>\\fixtures\\v17\\src\\app\\base-widget.ts"}],"inputs":[{"name":"accent","type":"boolean"},{"name":"heading","type":"string"},{"name":"disabled","type":"boolean"}],"outputs":[{"name":"blurred","type":"void"}],"publicMembers":[{"name":"focus","kind":"method","signature":"focus(): void","noop":true},{"name":"collapse","kind":"method","signature":"collapse(animated: boolean): void","noop":true}]}
 ```
 
-624 characters, 305 ms on the session's first call (it loads the project's own TypeScript),
-single-digit milliseconds after. The asked file declares one input and an `extends` clause;
-`heading`, `disabled`, the output and both methods live in `BasePanel` and `BaseWidget` and
-are resolved statically, and `"noop": true` on `focus()` is the subclass shadowing it with
-an empty body — the kind of fact that otherwise costs a whole file read per ancestor.
+811 characters with this checkout's absolute paths in place of `<repo>`, 305 ms on the
+session's first call (it loads the project's own TypeScript), single-digit milliseconds after.
+The asked file declares one input and an `extends` clause; `heading`, `disabled`, the output
+and both methods live in `BasePanel` and `BaseWidget` and are resolved statically, with their
+files named in `ancestors` for the next edit. `"noop": true` on `focus()` is the subclass
+shadowing it with an empty body — the kind of fact that otherwise costs a whole file read per
+ancestor.
 
 Configs for Cursor, VS Code, Windsurf, Codex CLI and JetBrains, the Node floor, and running
 from source are in [Requirements and setup](#requirements-and-setup).
@@ -95,7 +97,7 @@ Six tools, 1040 characters of descriptions in total. Answers are dense JSON with
 | Tool | What it answers | Needs the language server |
 |---|---|---|
 | `ng_template_definition` | where a symbol on a template line is declared — the line as Read shows it, the symbol by name | yes |
-| `ng_template_diagnostics` | Angular compiler errors for a template, or for a `files` batch; an entry anchored in the companion `.ts` carries `file` | yes |
+| `ng_template_diagnostics` | Angular compiler errors for a template, or for a `files` batch; an entry anchored in the companion `.ts` carries `file`, a message repeated on several lines comes once with its `lines` | yes |
 | `ng_component_info` | the public contract of a component or directive | no |
 | `ng_workspace_map` | projects, versions, `strictTemplates` and zone.js per project | no |
 | `ng_version_rules` | what exists and what does not in this project's Angular version | no |
@@ -322,8 +324,8 @@ Configuration, all variables optional:
 - `NG_TOKEN_SAVER_PREWARM=1` — `ng_workspace_map` with a `path` inside an app starts loading
   that app into the language server in the background, so the first diagnostics or definition
   call finds it ready: 21 s → 1.4 s on the production monorepo. The cost is ~1 GB of memory
-  until the idle shutdown, whether or not an LSP tool follows; a workspace root holding several
-  projects is not warmed, since which app to load is unknown.
+  until the idle shutdown, whether or not an LSP tool follows; a folder holding several projects
+  (a workspace root, an Nx `apps/`) is not warmed, since which app to load is unknown.
 - `NG_TOKEN_SAVER_SERVERS_DIR` — where the language-server branch lives, if not in
   `tools/servers` next to the build.
 
@@ -349,7 +351,7 @@ search. For a client that ignores `instructions`, the same text goes into `CLAUD
 ## Reproducing the measurements
 
 ```
-npm test                                  build plus 164 unit tests (node:test, no dependencies)
+npm test                                  build plus 182 unit tests (node:test, no dependencies)
 npm run smoke                             end-to-end check with a real MCP client over stdio
 npm run bench:settle                      whether a pause after didOpen is needed (it is not)
 npm run bench:standalone                  where standalone becomes the default (v17..v22)
@@ -369,7 +371,7 @@ The stand is `fixtures/v17..v22` — six real Angular workspaces, each with its 
 
 All six tools verified on the six fixtures and on two production codebases — 1298 and 407
 components, zero parse errors — plus one Angular 16 project to check that out-of-range
-refusals are structured rather than silent. 164 unit tests, all green.
+refusals are structured rather than silent. 182 unit tests, all green.
 
 Measured latency: the two LSP-backed tools pay 8–28 s of cold start on the first call and
 answer in 2–9 ms after it; the four static tools answer in 250–600 ms on the first call and

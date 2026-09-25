@@ -23,7 +23,14 @@ import { compact, json, kindFromSignature, symbolCharacter, toolError, type Tool
 import { SessionRegistry } from './lsp/registry.js';
 import { NgSession, SessionError } from './lsp/session.js';
 import { findCanaryTemplates, locateProject, WorkspaceError } from './lsp/workspace.js';
-import { CONTEXT_LIMIT, findUsages, targetFromSelector, targetOf } from './find-usages.js';
+import {
+  CONTEXT_LIMIT,
+  findUsages,
+  groupByFile,
+  searchedFor,
+  targetFromSelector,
+  targetOf,
+} from './find-usages.js';
 import { versionRules } from './version-rules.js';
 import { describeWorkspaceMap, pointsIntoOneProject, type WorkspaceMap } from './workspace-map.js';
 
@@ -136,7 +143,11 @@ server.registerTool(
     inputSchema: {
       file: z.string().describe('Path to the template: .html, or .ts with an inline template'),
       line: z.number().int().min(1),
-      symbol: z.string().optional().describe('The name on that line: userName, app-user-card, date'),
+      symbol: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('The name on that line: userName, app-user-card, date'),
       character: z
         .number()
         .int()
@@ -403,7 +414,14 @@ server.registerTool(
           limit: limit ?? 100,
           fileLimit: 20_000,
         });
-        return json(compact({ root: scanRoot, ...report }));
+        return json(
+          compact({
+            root: scanRoot,
+            ...report,
+            target: searchedFor(report.target),
+            usages: groupByFile(report.usages),
+          }),
+        );
       } catch (error) {
         return failure(error);
       }

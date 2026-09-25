@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { loadTypeScript } from '../dist/component-info.js';
-import { findUsages, parseSelector, targetFromSelector, targetOf } from '../dist/find-usages.js';
+import { findUsages, groupByFile, parseSelector, searchedFor, targetFromSelector, targetOf } from '../dist/find-usages.js';
 
 const ts = await loadTypeScript(resolve('fixtures/v22'));
 
@@ -553,4 +553,27 @@ test('the file limit is not skipped past on a large folder', async () => {
   assert.equal(found.scannedFiles, 5);
   assert.match(found.incomplete, /the walk stopped at 5 files/);
   await rm(root, { recursive: true, force: true });
+});
+
+test('the answer writes each file once and orders its usages by line', () => {
+  const usage = (file, line, kind) => ({ file, line, character: 1, kind, context: `line ${line}` });
+  const grouped = groupByFile([
+    usage('a.html', 9, 'element'),
+    usage('a.html', 2, 'attribute'),
+    usage('b.ts', 4, 'code'),
+  ]);
+  assert.deepEqual(grouped, [
+    {
+      file: 'a.html',
+      at: [
+        { line: 2, character: 1, kind: 'attribute', context: 'line 2' },
+        { line: 9, character: 1, kind: 'element', context: 'line 9' },
+      ],
+    },
+    { file: 'b.ts', at: [{ line: 4, character: 1, kind: 'code', context: 'line 4' }] },
+  ]);
+});
+
+test('the echoed target keeps only what was searched for', () => {
+  assert.deepEqual(searchedFor(targetFromSelector('app-user-card')), { elements: ['app-user-card'] });
 });

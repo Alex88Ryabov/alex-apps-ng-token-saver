@@ -56,8 +56,8 @@ export interface ComponentContract {
   extends: string | null;
   /** Heritage as written, ancestors' clauses merged in: ControlValueAccessor here answers 'is this a form control'. */
   implements: string[];
-  /** Resolved extends chain whose members are merged below, nearest ancestor first. */
-  ancestors: string[] | null;
+  /** Resolved extends chain whose members are merged below, nearest ancestor first; file unless it is this one. */
+  ancestors: Array<{ name: string; file?: string }> | null;
   inputs: InputInfo[];
   outputs: OutputInfo[];
   publicMembers: MemberInfo[];
@@ -746,7 +746,14 @@ export function resolveAncestors(
       }
     }
   }
-  merged.ancestors = chain.steps.length > 0 ? chain.steps.map((step) => step.name) : null;
+  // The file saves a search for 'class BasePanel' before editing an inherited member; an
+  // ancestor declared next to the component needs none.
+  merged.ancestors =
+    chain.steps.length > 0
+      ? chain.steps.map((step) =>
+          step.file.toLowerCase() === file.toLowerCase() ? { name: step.name } : { name: step.name, file: step.file },
+        )
+      : null;
 
   // Host directives are inherited in Angular, so an ancestor's count like the component's
   // own. The contract keeps only names, so the component's specs are re-read from its file.

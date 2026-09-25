@@ -473,7 +473,7 @@ test('ancestors: providers are never merged - Angular replaces, not merges', asy
        export class C extends Base {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['Base']);
     assert.deepEqual(complete.providers, [], 'the ancestor providers must not leak in');
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -611,7 +611,11 @@ function contractFrom(file, major = 17) {
 test('ancestors: a relative chain of two is merged and the child shadows', () => {
   const file = resolve('fixtures/v17/src/app/derived-card.component.ts');
   const complete = resolveAncestors(ts, contractFrom(file), file, v17);
-  assert.deepEqual(complete.ancestors, ['BasePanel', 'BaseWidget']);
+  assert.deepEqual(complete.ancestors.map(({ name }) => name), ['BasePanel', 'BaseWidget']);
+  assert.deepEqual(
+    complete.ancestors.map((item) => item.file),
+    [resolve('fixtures/v17/src/app/base-panel.ts'), resolve('fixtures/v17/src/app/base-widget.ts')],
+  );
   assert.deepEqual(
     complete.inputs.map((item) => item.name),
     ['accent', 'heading', 'disabled'],
@@ -627,7 +631,7 @@ test('ancestors: a relative chain of two is merged and the child shadows', () =>
 test('ancestors: a base behind a tsconfig alias barrel is found', () => {
   const file = resolve('fixtures/v17/src/app/alias-card.component.ts');
   const complete = resolveAncestors(ts, contractFrom(file), file, v17);
-  assert.deepEqual(complete.ancestors, ['NamedEntity']);
+  assert.deepEqual(complete.ancestors.map(({ name }) => name), ['NamedEntity']);
   assert.deepEqual(
     complete.publicMembers.map((item) => item.name).sort(),
     ['describe', 'id', 'label'],
@@ -669,7 +673,8 @@ test('ancestors: a generic base in the same file needs no import', async () => {
        export class C extends Store<string> {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Store']);
+    // Declared next to the component: no file to point at.
+    assert.deepEqual(complete.ancestors, [{ name: 'Store' }]);
     assert.ok(complete.publicMembers.some((item) => item.name === 'clear'));
     assert.equal(complete.incomplete, null);
   } finally {
@@ -778,7 +783,7 @@ test('ancestors: a bare host directive of an ancestor is named and flags nothing
        export class C extends Base {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['Base']);
     assert.deepEqual(complete.hostDirectives, ['CdkDrag']);
     assert.equal(complete.incomplete, null, 'a bare reference exposes nothing bindable');
   } finally {
@@ -927,7 +932,7 @@ test('ancestors: a renamed re-export through an already visited file is still fo
        export class C extends Target {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Target']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['Target']);
     assert.ok(complete.publicMembers.some((item) => item.name === 'ping'));
     assert.equal(complete.incomplete, null);
   } finally {
@@ -954,7 +959,7 @@ test('ancestors: an alias declared behind a tsconfig extends chain resolves', as
        export class C extends Base {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['Base']);
     assert.ok(complete.publicMembers.some((item) => item.name === 'tick'));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -975,7 +980,7 @@ test('ancestors: a .js specifier resolves to the .ts next to it', async () => {
        export class C extends Base {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['Base']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['Base']);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -993,7 +998,7 @@ test('ancestors: an extends cycle terminates instead of hanging', async () => {
        export class B extends A {}`,
     );
     const complete = resolveAncestors(ts, contractFrom(file, 22), file, dir);
-    assert.deepEqual(complete.ancestors, ['B']);
+    assert.deepEqual(complete.ancestors.map(({ name }) => name), ['B']);
     assert.match(complete.incomplete, /base class A/);
   } finally {
     await rm(dir, { recursive: true, force: true });
