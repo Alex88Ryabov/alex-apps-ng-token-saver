@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { loadTypeScript } from '../dist/component-info.js';
-import { describeWorkspaceMap } from '../dist/workspace-map.js';
+import { describeWorkspaceMap, pointsIntoOneProject } from '../dist/workspace-map.js';
 
 const ts = await loadTypeScript(resolve('fixtures/v22'));
 
@@ -201,4 +201,26 @@ test('multiple extends is not passed off as disabled', async () => {
 
 test('a complete walk is not flagged as partial', () => {
   assert.equal(map(resolve('fixtures/v22')).incomplete, null);
+});
+
+// Prewarm loads the app a folder points at; a folder holding several projects points at none.
+test('a folder points into one project only when no other project shares it', () => {
+  const root = resolve('fixtures/v17');
+  const found = map(root);
+  assert.equal(pointsIntoOneProject(found, join(root, 'src', 'app')), true);
+  assert.equal(pointsIntoOneProject(found, join(root, 'projects', 'ui-kit', 'src')), true);
+  // The root is the app itself and also holds projects/ui-kit.
+  assert.equal(pointsIntoOneProject(found, root), false);
+});
+
+test('an Nx apps/ folder with several apps points at none, one app folder at that app', async () => {
+  const root = await workspace({
+    'nx.json': {},
+    'apps/b2b/project.json': { name: 'b2b', projectType: 'application' },
+    'apps/b2c/project.json': { name: 'b2c', projectType: 'application' },
+  });
+  const found = map(root);
+  assert.equal(pointsIntoOneProject(found, join(root, 'apps')), false);
+  assert.equal(pointsIntoOneProject(found, join(root, 'apps', 'b2b', 'src')), true);
+  await rm(root, { recursive: true, force: true });
 });

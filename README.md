@@ -80,7 +80,7 @@ from source are in [Requirements and setup](#requirements-and-setup).
 ## The two problems it solves
 
 **1. No template awareness.** `grep` over an `.html` file cannot tell you where
-`{{ user().fullName }}` is declared, and no amount of reading gives you `NG2339 Property
+`{{ user().fullName }}` is declared, and no amount of reading gives you `TS2339 Property
 'emailAddress' does not exist on type 'UserVm'`. That is compiler output, not text.
 
 **2. Version drift.** The AI context files on angular.dev (`llms.txt`) describe only the
@@ -199,11 +199,12 @@ appears exactly at v19: `linkedSignal`, `resource`, `rxResource`, `httpResource`
 `afterRenderEffect`, `provideAppInitializer`.
 
 **Two documentation claims that measurement contradicted:** `standalone` becomes the default
-at **v19**, not v20; and `*ngIf` is not removed in 22.0.8 — it reports hint `NG6385` and
-keeps working, with `NgIf` still exported from `@angular/common`.
+at **v19**, not v20; and `*ngIf` is not removed in 22.0.8 — it reports hint `TS6385` (TypeScript's
+deprecation hint) and keeps working, with `NgIf` still exported from `@angular/common`.
 
-**Compiler gates**, read in the 22.0.8 bundle and confirmed by running it — all keyed on
-`--angularCoreVersion`, and with no version passed the newest semantics are assumed:
+**Compiler gates**, read in the 22.0.8 bundle and confirmed by running it — keyed on the
+project's Angular version, which the server detects from `@angular/core` next to the tsconfig
+(`--angularCoreVersion` is passed too, as a fallback):
 
 | Feature | Gate |
 |---|---|
@@ -282,6 +283,8 @@ cd fixtures/v22 && npm ci              # repeat per fixture you want to run
 
 The server is a plain stdio MCP server with no client-specific features, so any MCP client
 can launch it; installation and Claude Code registration are in [Quick start](#quick-start).
+Usage guidance for the agent travels in the MCP `instructions` field — see
+[Using with agents](#using-with-agents).
 
 **Cursor** — the one-click button in Quick start, or the same `mcpServers` JSON as in
 Quick start, in `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project).
@@ -306,13 +309,36 @@ command = "ng-token-saver"
 Protocol accepts the same JSON as Quick start's; for Junie, additionally enable "Pass
 custom MCP servers".
 
-Configuration, both variables optional:
+Configuration, all variables optional:
 
 - `NG_TOKEN_SAVER_IDLE_MS` — a language-server session unused this long shuts its ngserver
   down; the next call pays the cold start again. Default 900000 (15 minutes); `0` keeps
   sessions alive until the server exits. A session with a call in flight is never shut down.
+- `NG_TOKEN_SAVER_PREWARM=1` — `ng_workspace_map` with a `path` inside an app starts loading
+  that app into the language server in the background, so the first diagnostics or definition
+  call finds it ready: 21 s → 1.4 s on the production monorepo. The cost is ~1 GB of memory
+  until the idle shutdown, whether or not an LSP tool follows; a workspace root holding several
+  projects is not warmed, since which app to load is unknown.
 - `NG_TOKEN_SAVER_SERVERS_DIR` — where the language-server branch lives, if not in
   `tools/servers` next to the build.
+
+## Using with agents
+
+The server sends its usage guidance in the MCP `instructions` field (859 characters), which
+Claude Code keeps in the agent's context even when tool descriptions are deferred until a tool
+search. For a client that ignores `instructions`, the same text goes into `CLAUDE.md` or
+`AGENTS.md`:
+
+> Angular tools that answer from the compiler and the source instead of whole files. Prefer
+> them to reading and grepping: ng_component_info for what a component or directive accepts
+> (inputs, outputs, members, inherited ones included) instead of reading its .ts;
+> ng_find_usages for where a component, directive, pipe or service is used, and with input for
+> where one input is bound, instead of grep; ng_template_diagnostics after editing a template
+> instead of ng build; ng_template_definition for what a template symbol is; ng_version_rules
+> before suggesting an Angular API; ng_workspace_map once for projects, versions and
+> strictTemplates. The first diagnostics or definition call in a workspace loads the project
+> into the Angular language server and takes up to a minute on a large workspace; later calls
+> take milliseconds, so a slow first answer is not a hang.
 
 ## Reproducing the measurements
 

@@ -18,13 +18,14 @@ import {
   resolveAncestors,
 } from './component-info.js';
 import { diagnoseFile } from './diagnostics.js';
+import { instructionsFor } from './instructions.js';
 import { compact, json, kindFromSignature, toolError, type ToolResult } from './format.js';
 import { SessionRegistry } from './lsp/registry.js';
 import { NgSession, SessionError } from './lsp/session.js';
-import { locateProject, WorkspaceError } from './lsp/workspace.js';
+import { findCanaryTemplates, locateProject, WorkspaceError } from './lsp/workspace.js';
 import { findUsages, targetFromSelector, targetOf } from './find-usages.js';
 import { versionRules } from './version-rules.js';
-import { describeWorkspaceMap } from './workspace-map.js';
+import { describeWorkspaceMap, pointsIntoOneProject, type WorkspaceMap } from './workspace-map.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serversDir = process.env['NG_TOKEN_SAVER_SERVERS_DIR'] ?? join(here, '..', 'tools', 'servers');
@@ -43,6 +44,8 @@ const registry = new SessionRegistry(
   },
   Number.isFinite(rawIdleMs) && rawIdleMs >= 0 ? rawIdleMs : DEFAULT_IDLE_MS,
 );
+// Opt-in: a warmed server holds ~1 GB until the idle shutdown even if no LSP tool follows.
+const prewarm = process.env['NG_TOKEN_SAVER_PREWARM'] === '1';
 
 // resolve() even on an absolute path: an agent sends d:/a/b, our registries are keyed by
 // d:\a\b, and a raw string would miss the session lookup — spawning a fresh server per call.
@@ -64,6 +67,20 @@ function errorBody(error: unknown): Record<string, unknown> {
 
 function failure(error: unknown): ToolResult {
   return toolError(errorBody(error));
+}
+
+// Loads the app around this path so the first LSP call finds it ready. A folder holding several
+// projects is skipped: which app to load is unknown, and booting the process alone saves 0.6 s
+// of a ~20 s cold start (measured on the production monorepo).
+async function warmUpAround(inside: string, map: WorkspaceMap): Promise<void> {
+  const dir = statSync(inside).isDirectory() ? inside : dirname(inside);
+  if (!pointsIntoOneProject(map, dir)) {
+    return;
+  }
+  const [template] = findCanaryTemplates(dir, 1);
+  if (template) {
+    await registry.acquire(template).warmUp(template);
+  }
 }
 
 // MCP stdio shutdown is 'close stdin, wait for exit'. Exiting straight on EOF would drop
@@ -104,7 +121,10 @@ async function tracked(work: () => Promise<ToolResult>): Promise<ToolResult> {
 const packageVersion = (
   JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version: string }
 ).version;
-const server = new McpServer({ name: 'ng-token-saver', version: packageVersion });
+const server = new McpServer(
+  { name: 'ng-token-saver', version: packageVersion },
+  { instructions: instructionsFor(prewarm) },
+);
 
 server.registerTool(
   'ng_template_definition',
@@ -264,7 +284,12 @@ server.registerTool(
         const inside = path ? resolveFile(path) : process.cwd();
         const project = locateProject(inside);
         const ts = await loadTypeScript(project.root);
-        return json(compact(describeWorkspaceMap(ts, project.root, project.angularCoreVersion)));
+        const map = describeWorkspaceMap(ts, project.root, project.angularCoreVersion);
+        if (prewarm) {
+          // Failures stay silent: the first real call meets the same problem and reports it.
+          warmUpAround(inside, map).catch(() => {});
+        }
+        return json(compact(map));
       } catch (error) {
         return failure(error);
       }

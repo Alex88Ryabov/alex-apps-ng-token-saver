@@ -242,3 +242,35 @@ test('the same file in two path spellings is one document, not two', async () =>
   assert.equal(client.calls.didOpen.length, afterFirst, 'the second spelling must not reopen the file');
   assert.equal(new Set(client.calls.didOpen).size, client.calls.didOpen.length, 'no path opened twice');
 });
+
+// Reproduced on the production monorepo with prewarm: a diagnostics call made while the warm-up
+// was still loading the app skipped the load wait, timed out on the push and answered a false
+// 'no errors'. Two parallel tool calls into one cold app hit the same path.
+test('a document opened while its app is still loading waits for that same load', async () => {
+  let finishLoad;
+  const loaded = new Promise((resolve) => {
+    finishLoad = resolve;
+  });
+  const other = resolve('fixtures/v17/src/app/blocks-card.component.html');
+  const waitedFor = [];
+  const client = fakeClient({
+    async waitForProjectLoadSince() {
+      await loaded;
+      return true;
+    },
+    async waitForNextDiagnostics(path) {
+      waitedFor.push(path);
+      client.pushed.add(path);
+      return true;
+    },
+  });
+  const session = sessionWith(client);
+  const warming = session.warmUp(template);
+  const asked = session.diagnosticsFor(other);
+  // Long enough for the second pair's staggered opens to go through.
+  await new Promise((done) => setTimeout(done, 2500));
+  assert.deepEqual(waitedFor, [], 'nothing may be read before the project has loaded');
+  finishLoad(true);
+  await Promise.all([warming, asked]);
+  assert.ok(waitedFor.includes(other));
+});

@@ -33,6 +33,24 @@ await client.connect(
   }),
 );
 
+// What every session pays before the first call: instructions always, descriptions unless the
+// client defers tools.
+const { tools } = await client.listTools();
+const described = tools.reduce((sum, tool) => sum + (tool.description ?? '').length, 0);
+const withParams = tools.reduce(
+  (sum, tool) =>
+    sum +
+    Object.values(tool.inputSchema?.properties ?? {}).reduce(
+      (acc, item) => acc + (item.description ?? '').length,
+      0,
+    ),
+  described,
+);
+console.log(
+  `instructions ${client.getInstructions()?.length ?? 0} chars; ${tools.length} tools, ` +
+    `descriptions ${described} chars, with parameters ${withParams}`,
+);
+
 const call = async (name, args) => {
   const started = Date.now();
   const response = await client.callTool({ name, arguments: args }, undefined, { timeout: 180_000 });
@@ -66,5 +84,17 @@ for (const item of templates) {
 const batch = await call('ng_template_diagnostics', { files: templates.map((item) => resolve(item)) });
 console.log(`\n=== batch diagnostics over ${templates.length} file(s) (${batch.ms} ms)`);
 console.log(`  ${batch.text.slice(0, 240)}`);
+
+// The three tools that never start the language server, on the first template's workspace.
+const first = resolve(templates[0]);
+for (const [name, args] of [
+  ['ng_workspace_map', { path: first }],
+  ['ng_version_rules', { path: first, topic: 'signals' }],
+  ['ng_find_usages', { selectorOrFile: first.replace(/\.html$/, '.ts'), limit: 3 }],
+]) {
+  const answer = await call(name, args);
+  console.log(`\n=== ${name} (${answer.ms} ms, ${answer.text.length} chars)`);
+  console.log(`  ${answer.text.slice(0, 240)}`);
+}
 
 await client.close();

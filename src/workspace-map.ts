@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import type * as TS from 'typescript';
+import { belongsTo } from './format.js';
 
 type TypeScriptApi = typeof TS;
 
@@ -277,6 +278,15 @@ function versionOf(root: string, pkg: string): string | null {
   } catch {
     return null;
   }
+}
+
+// Whether a folder points at exactly one project. Inside nested projects the deepest one owns
+// it; a project lying below the folder competes (a workspace root, apps/ with several apps).
+export function pointsIntoOneProject(map: WorkspaceMap, dir: string): boolean {
+  const roots = map.projects.map((project) => join(map.root, project.root));
+  const inside = roots.some((root) => belongsTo(dir, root));
+  const below = roots.filter((root) => belongsTo(root, dir) && !belongsTo(dir, root)).length;
+  return below + (inside ? 1 : 0) === 1;
 }
 
 export function describeWorkspaceMap(

@@ -75,7 +75,10 @@ export class NgSession {
   private readonly areaHealth = new Map<string, { verdict: Health; until: number }>();
   private lastOpenAt = 0;
   private readonly syncLock = new Mutex();
-  private readonly loadedApps = new Set<string>();
+  // One load wait per app, shared: a document opened while that load still runs must wait for
+  // it too, or its diagnostics time out into a false 'no errors'. One entry per app, gone with
+  // the session.
+  private readonly appLoads = new Map<string, Promise<boolean>>();
   // Companions we already waited a push for: a server that never pushes for the companion
   // must not tax every later diagnostics call with the full timeout.
   private readonly companionWaits = new Set<string>();
@@ -269,11 +272,22 @@ export class NgSession {
     // more project, but waiting for a second load changed nothing; the retry in definitionWith is
     // the current safety net. This spot is not settled.
     const app = this.appRootFor(path);
-    if (!this.loadedApps.has(app)) {
-      this.loadedApps.add(app);
-      await client.waitForProjectLoadSince(since, PROJECT_LOAD_TIMEOUT_MS);
+    let load = this.appLoads.get(app);
+    if (!load) {
+      load = client.waitForProjectLoadSince(since, PROJECT_LOAD_TIMEOUT_MS);
+      this.appLoads.set(app, load);
     }
+    await load;
     return client;
+  }
+
+  // Loads the app around this template ahead of the first request: on the production monorepo
+  // the project load is ~20 s of a cold start, initialize only 0.6 s.
+  async warmUp(rawPath: string): Promise<void> {
+    await this.tracked(async () => {
+      const client = await this.awaitClient();
+      await this.syncPair(client, canonical(rawPath));
+    });
   }
 
   async definitionAt(rawPath: string, position: Position): Promise<LocationHit[]> {
