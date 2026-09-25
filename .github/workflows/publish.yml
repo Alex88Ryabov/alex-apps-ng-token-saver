@@ -46,6 +46,17 @@ jobs:
       - name: install mcp-publisher
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      # the registry validates against npm, which answered 404 for a fresh 0.2.0 for ~60 s;
+      # 5 minutes is a ceiling, not a measurement
+      - name: wait for the version on npm
+        run: |
+          package="$(jq -r .name package.json)@$(jq -r .version package.json)"
+          for attempt in $(seq 1 30); do
+            npm view "$package" version 2>/dev/null && exit 0
+            sleep 10
+          done
+          echo "npm still does not serve $package after 5 minutes" >&2
+          exit 1
       # the same id-token permission npm uses; no stored credential
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish
