@@ -14,6 +14,8 @@ test('README quotes the instructions the server sends', () => {
     .map((line) => line.slice(2))
     .join(' ');
   assert.equal(quoted, instructionsFor(false));
+  const stated = /`instructions` field \((\d+) characters\)/.exec(section)?.[1];
+  assert.equal(Number(stated), instructionsFor(false).length, 'the length README states');
 });
 
 test('the prewarm note is added only when prewarm is on', () => {

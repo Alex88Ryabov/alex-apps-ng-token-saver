@@ -331,9 +331,10 @@ Configuration, all variables optional:
 
 ## Using with agents
 
-The server sends its usage guidance in the MCP `instructions` field (859 characters), which
+The server sends its usage guidance in the MCP `instructions` field (924 characters), which
 Claude Code keeps in the agent's context even when tool descriptions are deferred until a tool
-search. For a client that ignores `instructions`, the same text goes into `CLAUDE.md` or
+search (checked on Claude Code 2.1.282: the whole text arrives while the tools show only their
+names). For a client that ignores `instructions`, the same text goes into `CLAUDE.md` or
 `AGENTS.md`:
 
 > Angular tools that answer from the compiler and the source instead of whole files. Prefer

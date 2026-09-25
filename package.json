@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "tsc && node --test tests/*.test.mjs",
+    "test": "tsc && node --test",
     "smoke": "node tools/mcp-smoke.mjs",
     "bench:matrix": "node tools/lsp-probe.mjs --server tools/servers/ls22 --project fixtures/v22",
     "bench:negative": "node tools/lsp-negative.mjs",
